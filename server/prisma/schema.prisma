@@ -1,0 +1,277 @@
+// =============================================================================
+//  AbhiBus Live Journey Chat — EPHEMERAL CHAT STORE (PostgreSQL)
+// =============================================================================
+//  Booking truth lives in MySQL `abrs_new` (abrs_reserved_tickets[_det] and
+//  abrs_api_reserved_tickets[_det]). This database only holds a minimal,
+//  privacy-stripped PROJECTION of those bookings for the duration of a trip,
+//  plus chat data. Everything journey-scoped is hard-deleted
+//  PURGE_AFTER_ARRIVAL_MIN (default 120) after arrival by jobs/expirySweeper.
+//
+//  Retained beyond purge (by design, needs legal sign-off):
+//    - SosEvent       — safety incidents are never auto-deleted with chat.
+//    - MessageReport  — a snapshot of a reported message, kept until
+//                       `retain_until` so trust & safety can act on it.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CHAT_DATABASE_URL")
+}
+
+enum JourneyStatus {
+  SCHEDULED
+  IN_TRANSIT
+  ARRIVED
+  PURGED
+}
+
+enum Gender {
+  M
+  F
+  O
+}
+
+enum RoomType {
+  MAIN_COMMON
+  WOMEN_ONLY
+}
+
+enum ContentType {
+  TEXT
+  STICKER
+  BUS_LOCATION
+  BROADCAST
+  LANDMARK // extension: pickup landmark photo card
+  SYSTEM   // extension: join notices, game results
+}
+
+enum BookingChannel {
+  OWN // abrs_reserved_tickets
+  API // abrs_api_reserved_tickets
+  QR  // guest who joined by scanning a fellow passenger's QR (booked elsewhere, e.g. RedBus) — never F-verified
+}
+
+enum EtaGameStatus {
+  OPEN
+  LOCKED
+  RESOLVED
+}
+
+enum SosStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+/// One physical bus run. journey_id = "<Service_Id>:<Journey_date>"
+model BusJourney {
+  journeyId        String        @id @map("journey_id")
+  serviceId        String        @map("service_id")
+  journeyDate      String        @map("journey_date")
+  busNumber        String        @map("bus_number")
+  operatorName     String        @map("operator_name")
+  routeName        String        @map("route_name")
+  sourceCity       String        @map("source_city")
+  destinationCity  String        @map("destination_city")
+  startTime        DateTime      @map("start_time")
+  estimatedEndTime DateTime      @map("estimated_end_time")
+  actualEndTime    DateTime?     @map("actual_end_time")
+  purgeAt          DateTime?     @map("purge_at")
+  status           JourneyStatus @default(SCHEDULED)
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  bookings PassengerBooking[]
+  rooms    ChatRoom[]
+  mutes    SeatMute[]
+  blocks   SeatBlock[]
+  etaGames EtaGame[]
+
+  @@index([status, purgeAt])
+  @@map("bus_journey")
+}
+
+/// Privacy-stripped projection of abrs_*_reserved_tickets_det.
+/// passenger_name exists for spec parity but is NEVER populated.
+model PassengerBooking {
+  id            String         @id @default(uuid())
+  pnrNumber     String         @map("pnr_number")
+  journeyId     String         @map("journey_id")
+  seatNumber    String         @map("seat_number")
+  passengerName String?        @map("passenger_name")
+  gender        Gender
+  phoneHash     String?        @map("phone_hash") // HMAC-SHA256(phone, pepper) — never the raw number
+  channel       BookingChannel
+  deviceId      String?        @map("device_id")  // seat <-> device binding (anti seat-hijack)
+  displayName   String?        @map("display_name") // chosen by the passenger when joining (not the booking name)
+  avatarId      String?        @map("avatar_id")    // one of AVATARS in shared/protocol.ts; null = initial
+  invitedBy     String?        @map("invited_by")   // QR guests: seat of the passenger whose QR they scanned
+  claimedAt     DateTime?      @map("claimed_at")
+  syncedAt      DateTime       @default(now()) @updatedAt @map("synced_at")
+
+  journey BusJourney @relation(fields: [journeyId], references: [journeyId], onDelete: Cascade)
+
+  @@unique([journeyId, seatNumber])
+  @@index([pnrNumber])
+  @@map("passenger_booking")
+}
+
+model ChatRoom {
+  roomId          String   @id @default(uuid()) @map("room_id")
+  journeyId       String   @map("journey_id")
+  roomType        RoomType @map("room_type")
+  isActive        Boolean  @default(true) @map("is_active")
+  pinnedMessageId String?  @map("pinned_message_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  journey  BusJourney @relation(fields: [journeyId], references: [journeyId], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([journeyId, roomType])
+  @@map("chat_room")
+}
+
+model Message {
+  messageId    String      @id @default(uuid()) @map("message_id")
+  roomId       String      @map("room_id")
+  senderSeat   String?     @map("sender_seat")
+  senderHandle String      @map("sender_handle")
+  contentType  ContentType @map("content_type")
+  payload      Json
+  clientMsgId  String?     @map("client_msg_id") // idempotency key for offline retries
+  isHidden     Boolean     @default(false) @map("is_hidden")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  room      ChatRoom          @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+  receipts  ReadReceipt[]
+  reactions MessageReaction[]
+
+  @@unique([roomId, senderSeat, clientMsgId])
+  @@index([roomId, createdAt])
+  @@map("message")
+}
+
+/// Spec: (message_id, pnr_number, seen_at). Keyed by seat as well, because one
+/// PNR can hold several seats (family bookings) and each reads independently.
+model ReadReceipt {
+  messageId  String   @map("message_id")
+  pnrNumber  String   @map("pnr_number")
+  seatNumber String   @map("seat_number")
+  seenAt     DateTime @default(now()) @map("seen_at")
+
+  message Message @relation(fields: [messageId], references: [messageId], onDelete: Cascade)
+
+  @@id([messageId, seatNumber])
+  @@map("read_receipt")
+}
+
+model MessageReaction {
+  messageId  String   @map("message_id")
+  seatNumber String   @map("seat_number")
+  emoji      String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [messageId], onDelete: Cascade)
+
+  @@id([messageId, seatNumber, emoji])
+  @@map("message_reaction")
+}
+
+/// Survives chat purge (no FK) so trust & safety can act after arrival.
+/// Unique per (message, reporter PNR): a family on one PNR counts as ONE report,
+/// which stops a group from brigading a stranger into a mute.
+model MessageReport {
+  id              String   @id @default(uuid())
+  journeyId       String   @map("journey_id")
+  messageId       String   @map("message_id")
+  reporterPnr     String   @map("reporter_pnr")
+  reporterSeat    String   @map("reporter_seat")
+  reportedSeat    String   @map("reported_seat")
+  reason          String
+  contentSnapshot Json     @map("content_snapshot")
+  createdAt       DateTime @default(now()) @map("created_at")
+  retainUntil     DateTime @map("retain_until")
+
+  @@unique([messageId, reporterPnr])
+  @@index([journeyId, reportedSeat])
+  @@map("message_report")
+}
+
+model SeatMute {
+  journeyId  String   @map("journey_id")
+  seatNumber String   @map("seat_number")
+  reason     String
+  mutedAt    DateTime @default(now()) @map("muted_at")
+
+  journey BusJourney @relation(fields: [journeyId], references: [journeyId], onDelete: Cascade)
+
+  @@id([journeyId, seatNumber])
+  @@map("seat_mute")
+}
+
+model SeatBlock {
+  journeyId   String   @map("journey_id")
+  blockerSeat String   @map("blocker_seat")
+  blockedSeat String   @map("blocked_seat")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  journey BusJourney @relation(fields: [journeyId], references: [journeyId], onDelete: Cascade)
+
+  @@id([journeyId, blockerSeat, blockedSeat])
+  @@map("seat_block")
+}
+
+model EtaGame {
+  id             String        @id @default(uuid())
+  journeyId      String        @map("journey_id")
+  checkpointName String        @map("checkpoint_name")
+  checkpointLat  Float         @map("checkpoint_lat")
+  checkpointLng  Float         @map("checkpoint_lng")
+  status         EtaGameStatus @default(OPEN)
+  closesAt       DateTime      @map("closes_at")
+  actualAt       DateTime?     @map("actual_at")
+  winnerSeat     String?       @map("winner_seat")
+  winnerPnr      String?       @map("winner_pnr")
+  rewardPoints   Int           @map("reward_points")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  journey BusJourney @relation(fields: [journeyId], references: [journeyId], onDelete: Cascade)
+  guesses EtaGuess[]
+
+  @@index([journeyId, status])
+  @@map("eta_game")
+}
+
+model EtaGuess {
+  id         String   @id @default(uuid())
+  gameId     String   @map("game_id")
+  pnrNumber  String   @map("pnr_number")
+  seatNumber String   @map("seat_number")
+  guessAt    DateTime @map("guess_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  game EtaGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, seatNumber])
+  @@map("eta_guess")
+}
+
+/// Never purged with chat. No FK to journey on purpose.
+model SosEvent {
+  id             String    @id @default(uuid())
+  journeyId      String    @map("journey_id")
+  pnrNumber      String    @map("pnr_number")
+  seatNumber     String    @map("seat_number")
+  lat            Float?
+  lng            Float?
+  placeLabel     String?   @map("place_label")
+  status         SosStatus @default(OPEN)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  acknowledgedAt DateTime? @map("acknowledged_at")
+
+  @@index([status, createdAt])
+  @@map("sos_event")
+}
