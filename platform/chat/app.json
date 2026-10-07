@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Trip Rooms",
+    "slug": "trip-rooms-chat",
+    "scheme": "triprooms",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0B132B",
+    "ios": {
+      "bundleIdentifier": "com.ixigo.triprooms",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Use your voice to type messages in trip chat.",
+        "NSSpeechRecognitionUsageDescription": "Turn your voice into text for trip chat. Audio is not stored."
+      }
+    },
+    "android": {
+      "package": "com.ixigo.triprooms",
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Use your voice to type messages in trip chat.",
+          "speechRecognitionPermission": "Turn your voice into text for trip chat. Audio is not stored.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Share where you are with people on your trip, only when you choose to."
+        }
+      ]
+    ]
+  }
+}

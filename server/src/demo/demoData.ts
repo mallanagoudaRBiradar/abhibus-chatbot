@@ -27,6 +27,13 @@ export const DEMO = {
     { pnr: 'ABFAM026', label: 'Family booking, 2 seats', seats: [{ seat: '3L', gender: 'F' }, { seat: '4L', gender: 'M' }] as Seat[] },
   ],
 
+  /**
+   * Extra demo tickets created at runtime: when a ticket's seat is already held by another
+   * browser, the next browser gets its own seat (same ticket type, e.g. still a woman's seat),
+   * so several people can try the demo at once as different passengers.
+   */
+  extraTickets: new Map<string, { pnr: string; label: string; seats: Seat[] }>(),
+
   /** Simulated co-passengers that make the demo feel alive. */
   crowd: [
     { seat: '4W', gender: 'M', name: 'Arjun', avatar: 'animal-1' },

@@ -10,10 +10,11 @@ import { hub, REMOVED_REASON } from './hub';
 import { getPinned } from '../features/restStop';
 import { getProgress } from '../features/progress';
 import { currentGame, submitGuess } from '../features/etaGame';
-import { blockedSeats, isMuted, reportMessage, reportPerson, setBlock } from '../features/moderationService';
+import { blockedSeats, isMuted, muteNote, reportMessage, reportPerson, setBlock } from '../features/moderationService';
 import { tracker } from '../tracking/gpsProvider';
 import { makeMove, startGame } from '../features/miniGames';
 import { notifyCare } from '../features/careMentions';
+import { platformBridge } from '../platform/bridge';
 import { createQrInvite, JoinError } from '../features/journeyService';
 import { NH44_WAYPOINTS } from '../tracking/routeData';
 import { haversineKm } from '../lib/geo';
@@ -122,8 +123,8 @@ export function createSocketServer(httpServer: HttpServer) {
 
       const journey = await prisma.busJourney.findUniqueOrThrow({ where: { journeyId } });
       const page = since
-        ? { ...(await hub.loadMessages(journeyId, roomType, { after: new Date(since), limit: 200 })), hasMore: true }
-        : await hub.loadMessages(journeyId, roomType, { limit: 50 });
+        ? { ...(await hub.loadMessages(journeyId, roomType, { after: new Date(since), limit: 200, viewerSeat: seat })), hasMore: true }
+        : await hub.loadMessages(journeyId, roomType, { limit: 50, viewerSeat: seat });
       const progress = await getProgress(journey);
 
       const snapshot: RoomSnapshot = {
@@ -136,6 +137,7 @@ export function createSocketServer(httpServer: HttpServer) {
         progress,
         landmarks: tracker.getLandmarks(journey, progress?.progress ?? 0),
         muted: await isMuted(journeyId, seat),
+        mutedNote: await muteNote(journeyId, seat),
         blockedSeats: await blockedSeats(journeyId, seat),
         serverNow: new Date().toISOString(),
       };
@@ -151,7 +153,7 @@ export function createSocketServer(httpServer: HttpServer) {
 
     on(C2S.ROOM_HISTORY, z.object({ roomType: RoomTypeZ, before: z.string().datetime() }), async ({ roomType, before }) => {
       if (!inRoom(roomType)) return fail('NOT_IN_ROOM', 'Join the room first.');
-      return ok(await hub.loadMessages(journeyId, roomType, { before: new Date(before), limit: 40 }));
+      return ok(await hub.loadMessages(journeyId, roomType, { before: new Date(before), limit: 40, viewerSeat: seat }));
     });
 
     // ---------------------------------------------------- message:send ---
@@ -177,6 +179,7 @@ export function createSocketServer(httpServer: HttpServer) {
       const message = await hub.createMessage(journeyId, input.roomType, {
         senderSeat: seat, senderHandle: socket.data.handle, contentType: input.contentType, payload, clientMsgId: input.clientMsgId,
       });
+      platformBridge.mirrorMessage(journeyId, seat, input.roomType, message); // Console + support desk (async, never blocks)
       if ((payload as { mentions?: string[] }).mentions?.includes('CARE')) void notifyCare(journeyId, { seat, name: socket.data.handle }, message.id, (payload as { text: string }).text);
       return ok(message);
     });

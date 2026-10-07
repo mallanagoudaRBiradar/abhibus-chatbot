@@ -29,6 +29,7 @@ export function Composer({ roomIndex, onOpenGame, onOpenLandmarks, onOpenLocatio
   const insets = useSafeAreaInsets();
   const roomType = useChat((s) => s.activeRoom);
   const muted = useChat((s) => s.muted);
+  const mutedNote = useChat((s) => s.mutedNote);
   const online = useChat((s) => s.connection === 'online');
   const theme = roomTheme[roomType];
   const game = useChat((s) => s.game);
@@ -97,7 +98,7 @@ export function Composer({ roomIndex, onOpenGame, onOpenLandmarks, onOpenLocatio
       <View style={[styles.mutedBar, { paddingBottom: insets.bottom + 12 }]} accessibilityLiveRegion="polite">
         <Ionicons name="volume-mute-outline" size={18} color={palette.textSecondary} />
         <Txt v="small" color={palette.textSecondary} style={{ flex: 1 }}>
-          You’ve been muted for the rest of this trip after several passengers reported messages. You can still read the chat and use SOS.
+          {mutedNote ?? 'You can’t post in this chat right now. You can still read it and use SOS.'}
         </Txt>
       </View>
     );

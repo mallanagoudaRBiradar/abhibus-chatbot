@@ -1,0 +1,502 @@
+// =============================================================================
+//  Trip Rooms platform — multi-tenant schema
+// =============================================================================
+//  Tenants (AbhiBus, ConfirmTkt, ixigo Trains, ixigo Flights, …) push their
+//  trips and travellers here through the API. The platform never reads a
+//  tenant's own database. Everything a traveller writes is deleted at purge_at.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Vertical {
+  bus
+  train
+  flight
+  custom
+}
+
+enum RoomState {
+  scheduled // created, not open yet
+  dormant   // flights: waiting for a delay ≥ activation threshold
+  open      // travellers can chat, waiting to board
+  onboard   // trip in progress
+  read_only // trip done, room readable for a while
+  closed    // finished; content purged at purge_at
+}
+
+enum ChannelKind {
+  MAIN
+  WOMEN // only members whose booking gender (sent by the tenant) is F
+}
+
+enum MemberRole {
+  traveller
+  ops
+  crew
+  bot
+}
+
+enum Gender {
+  M
+  F
+  O
+  U // unknown / not shared by tenant
+}
+
+enum ContentType {
+  TEXT
+  STICKER
+  LOCATION  // bus / train / flight position card, or a passenger's (live) location
+  ALERT     // Ops announcement: severity, pin, translations
+  SYSTEM
+  TARA      // bot answer
+  PRIVATE   // visible to one member only (SOS / wait-for-me replies)
+  POLL
+  SURVEY
+  GAME
+  AD        // sponsored card / stop offer / game invite
+  ISSUE     // group issue card ("Me too")
+  VOUCHER
+  TIMER     // rest-stop timer
+  LOST      // lost & found post
+  CREW
+  RATE      // trip rating card
+  LANDMARK
+}
+
+enum UserRole {
+  admin
+  ops
+  marketing
+  developer
+  support
+  viewer
+}
+
+enum ActionType {
+  sos
+  issue
+  wait_request
+  lost_found
+  report
+  care // traveller tagged the support desk (@care, @support, @<App> Care) — handled in Console → Customer support
+}
+
+enum Severity {
+  info
+  warning
+  critical
+}
+
+enum ActionStatus {
+  open
+  acknowledged
+  resolved
+}
+
+enum CampaignFormat {
+  card
+  sponsored_poll
+  sponsored_game
+  stop_offer
+  survey
+}
+
+enum CampaignStatus {
+  draft
+  live
+  paused
+  ended
+}
+
+model Tenant {
+  id        String   @id // e.g. abhibus, confirmtkt, ixigo_trains, ixigo_flights
+  name      String
+  verticals Vertical[]
+  theme     Json // { brand, brandInk, font, logoText }
+  config    Json // features, timing, quiet, ads, thresholds, identity_mode
+  version   Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  clients   ApiClient[]
+  rooms     Room[]
+  webhooks  Webhook[]
+  bots      Bot[]
+
+  @@map("tenant")
+}
+
+model ApiClient {
+  id         String    @id @default(uuid())
+  tenantId   String    @map("tenant_id")
+  name       String
+  clientId   String    @unique @map("client_id")
+  secretHash String    @map("secret_hash") // scrypt
+  secretHint String    @map("secret_hint") // last 4 chars
+  scopes     String[]
+  createdBy  String?   @map("created_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("api_client")
+}
+
+/// Dashboard users (Ops, Marketing, Developer, Admin, Support, Viewer).
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String
+  passwordHash String    @map("password_hash")
+  role         UserRole
+  tenantIds    String[]  @map("tenant_ids") // empty = all tenants
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+  /// Notification centre: { seenAt, read: [event ids] } — what this person has already seen.
+  notifState   Json?     @map("notif_state")
+
+  @@map("dashboard_user")
+}
+
+model Room {
+  id           String     @id // room_xxxx
+  tenantId     String     @map("tenant_id")
+  tripKey      String     @map("trip_key")
+  vertical     Vertical
+  title        String
+  subtitle     String     @default("")
+  scope        Json // vertical-specific: operator_id/service_id, train_no/coach, carrier/flight_no …
+  departsAt    DateTime   @map("departs_at")
+  arrivesAt    DateTime   @map("arrives_at")
+  stops        Json // [{code,name,lat,lng,sched_arr,sched_dep,type}]
+  activation   Json? // flights: {mode: always|on_delay, min_delay_min}
+  features     Json? // per-room overrides of tenant features
+  locationFeed String     @default("none") @map("location_feed") // none | vts | running_status | flight_status
+  locale       String     @default("en-IN")
+  metadata     Json?
+  meta         Json       @default("{}") // live trip facts: platform, gate, terminal, belt, vehicle_no
+  state        RoomState  @default(scheduled)
+  delayMin     Int        @default(0) @map("delay_min")
+  breakdown    Boolean    @default(false)
+  opsOnly      Boolean    @default(false) @map("ops_only")
+  slowMode     Boolean    @default(false) @map("slow_mode")
+  parentRoomId String?    @map("parent_room_id") // train coach room -> train-wide room
+  opensAt      DateTime   @map("opens_at")
+  readOnlyAt   DateTime   @map("read_only_at")
+  purgeAt      DateTime   @map("purge_at")
+  lastAlertAt  DateTime?  @map("last_alert_at")
+  lastAdAt     DateTime?  @map("last_ad_at")
+  adCount      Int        @default(0) @map("ad_count")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channels Channel[]
+  members  Member[]
+
+  @@unique([tenantId, tripKey])
+  @@index([state, purgeAt])
+  @@map("room")
+}
+
+model Channel {
+  id        String      @id @default(uuid())
+  roomId    String      @map("room_id")
+  kind      ChannelKind
+  pinnedId  String?     @map("pinned_id")
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  room     Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([roomId, kind])
+  @@map("channel")
+}
+
+model Member {
+  id              String     @id // mem_xxxx
+  roomId          String     @map("room_id")
+  externalUserId  String     @map("external_user_id")
+  bookingRef      String     @map("booking_ref")
+  segmentFrom     String?    @map("segment_from")
+  segmentTo       String?    @map("segment_to")
+  partySize       Int        @default(1) @map("party_size")
+  seatRefs        String[]   @map("seat_refs") // Ops only, never shown
+  chartStatus     String?    @map("chart_status")
+  locale          String     @default("en-IN")
+  notify          Json       @default("{}")
+  gender          Gender     @default(U) // only used for the women channel gate; never shown
+  role            MemberRole @default(traveller)
+  handle          String // random handle ("Quiet Tiger") — always set
+  displayName     String?    @map("display_name") // profile mode: first name the traveller chose
+  avatarId        String?    @map("avatar_id")
+  profileSet      Boolean    @default(false) @map("profile_set")
+  muted           Boolean    @default(false)
+  removedAt       DateTime?  @map("removed_at")
+  removedReason   String?    @map("removed_reason")
+  sharingLocation Boolean    @default(false) @map("sharing_location")
+  lastSeenAt      DateTime?  @map("last_seen_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, externalUserId])
+  @@index([roomId, role])
+  @@map("member")
+}
+
+model Message {
+  id          String      @id @default(uuid())
+  channelId   String      @map("channel_id")
+  senderId    String?     @map("sender_id") // member id; null = Ops / system / bot
+  senderName  String      @map("sender_name")
+  contentType ContentType @map("content_type")
+  payload     Json
+  visibleTo   String?     @map("visible_to") // PRIVATE messages: one member id
+  clientMsgId String?     @map("client_msg_id")
+  hidden      Boolean     @default(false)
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  reactions Reaction[]
+  receipts  Receipt[]
+
+  @@unique([channelId, senderId, clientMsgId])
+  @@index([channelId, createdAt])
+  @@map("message")
+}
+
+model Reaction {
+  messageId String   @map("message_id")
+  memberId  String   @map("member_id")
+  key       String // emoji, "poll:<i>", "g:<move>", "issue:metoo"
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, memberId, key])
+  @@map("reaction")
+}
+
+model Receipt {
+  messageId String   @map("message_id")
+  memberId  String   @map("member_id")
+  seenAt    DateTime @default(now()) @map("seen_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, memberId])
+  @@map("receipt")
+}
+
+model Block {
+  roomId    String   @map("room_id")
+  blockerId String   @map("blocker_id")
+  blockedId String   @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([roomId, blockerId, blockedId])
+  @@map("member_block")
+}
+
+/// Reports survive the purge (no FK) so trust & safety can act on them.
+model Report {
+  id           String   @id @default(uuid())
+  roomId       String   @map("room_id")
+  targetKey    String   @map("target_key") // message id or "person:<memberId>"
+  reporterRef  String   @map("reporter_ref") // booking ref: one family = one report
+  reporterId   String   @map("reporter_id")
+  reportedId   String   @map("reported_id")
+  reason       String
+  snapshot     Json
+  createdAt    DateTime @default(now()) @map("created_at")
+  retainUntil  DateTime @map("retain_until")
+
+  @@unique([targetKey, reporterRef])
+  @@index([roomId, reportedId])
+  @@map("report")
+}
+
+/// The Ops action inbox: SOS, group issues, wait-for-me, lost & found, reports.
+model Action {
+  id           String       @id // act_xxxx
+  tenantId     String       @map("tenant_id")
+  roomId       String       @map("room_id")
+  memberId     String?      @map("member_id")
+  type         ActionType
+  severity     Severity
+  title        String
+  detail       String
+  data         Json         @default("{}")
+  status       ActionStatus @default(open)
+  assignee     String?
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@map("ops_action")
+}
+
+model IssueReport {
+  roomId    String   @map("room_id")
+  label     String
+  memberId  String   @map("member_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([roomId, label, memberId])
+  @@map("issue_report")
+}
+
+/// Every identity reveal and moderation action, kept for weekly review.
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String?  @map("tenant_id")
+  actor     String // user email or api client id
+  action    String
+  roomId    String?  @map("room_id")
+  targetId  String?  @map("target_id")
+  reason    String?
+  data      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@map("audit_log")
+}
+
+/// Fixes from official feeds and on-board travellers; fused into one position.
+model LocationFix {
+  id         String   @id @default(uuid())
+  roomId     String   @map("room_id")
+  source     String // vts | running_status | flight_status | crowd
+  memberId   String?  @map("member_id")
+  lat        Float?
+  lng        Float?
+  data       Json     @default("{}")
+  recordedAt DateTime @default(now()) @map("recorded_at")
+
+  @@index([roomId, recordedAt])
+  @@map("location_fix")
+}
+
+model TripEvent {
+  id        String   @id // evt_xxxx
+  roomId    String   @map("room_id")
+  type      String
+  data      Json
+  actor     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([roomId, createdAt])
+  @@map("trip_event")
+}
+
+model Campaign {
+  id          String         @id // cmp_xxxx
+  name        String
+  advertiser  String
+  format      CampaignFormat
+  status      CampaignStatus @default(draft)
+  tenantIds   String[]       @map("tenant_ids") // empty = all
+  verticals   Vertical[]
+  routes      String[] // route / train_no / flight_no; empty = all
+  stops       String[] // stop_offer: stop names/codes
+  stages      RoomState[]
+  creative    Json // title, body, cta, tile
+  poll        Json?
+  survey      Json?
+  startsAt    DateTime?      @map("starts_at")
+  endsAt      DateTime?      @map("ends_at")
+  capImpressions Int?        @map("cap_impressions")
+  impressions Int            @default(0)
+  clicks      Int            @default(0)
+  responses   Int            @default(0)
+  createdBy   String?        @map("created_by")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  @@map("campaign")
+}
+
+model CampaignDelivery {
+  id         String   @id @default(uuid())
+  campaignId String   @map("campaign_id")
+  roomId     String   @map("room_id")
+  ok         Boolean
+  reason     String
+  messageId  String?  @map("message_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([campaignId, createdAt])
+  @@map("campaign_delivery")
+}
+
+model SurveyTemplate {
+  id        String   @id // srv_xxxx
+  tenantId  String?  @map("tenant_id")
+  name      String
+  questions Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("survey_template")
+}
+
+model SurveyResponse {
+  messageId String   @map("message_id")
+  memberId  String   @map("member_id")
+  answers   Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([messageId, memberId])
+  @@map("survey_response")
+}
+
+model Webhook {
+  id        String   @id // wh_xxxx
+  tenantId  String   @map("tenant_id")
+  url       String
+  events    String[]
+  secret    String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("webhook")
+}
+
+/// Every event the platform emits, delivered or not — powers the event stream and webhook retries.
+model EventLog {
+  id         String   @id // evt_xxxx
+  tenantId   String?  @map("tenant_id")
+  roomId     String?  @map("room_id")
+  type       String
+  data       Json
+  deliveries Json     @default("[]") // [{webhook_id, status, attempts, at}]
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@map("event_log")
+}
+
+model Bot {
+  id         String   @id // bot_xxxx
+  tenantId   String   @map("tenant_id")
+  name       String
+  label      String
+  webhookUrl String?  @map("webhook_url")
+  triggers   String[]
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("bot")
+}

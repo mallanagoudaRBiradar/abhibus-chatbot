@@ -80,8 +80,9 @@ class ChatSocketService {
     s.on(S2C.GAME, (g: EtaGameState) => store().setGame(g));
     s.on(S2C.PROGRESS, (p: ProgressState) => store().setProgress(p));
     s.on(S2C.TYPING, ({ roomType, seat, isTyping }: { roomType: RoomType; seat: string; isTyping: boolean }) => store().setTyping(roomType, seat, isTyping));
-    s.on(S2C.MUTED, () => store().setMuted(true));
-    s.on(S2C.REMOVED, () => { store().setClosed('REMOVED'); this.disconnect(); });
+    s.on(S2C.MUTED, ({ reason }: { reason?: string | null }) => store().setMuted(true, reason ?? null));
+    s.on(S2C.UNMUTED, () => store().setMuted(false));
+    s.on(S2C.REMOVED, ({ reason }: { reason?: string }) => { store().setClosed('REMOVED', reason ?? null); this.disconnect(); });
     s.on(S2C.JOURNEY_ENDING, ({ purgeAt }: { purgeAt: string }) => store().setPurgeAt(purgeAt));
     s.on(S2C.JOURNEY_CLOSED, () => { store().setClosed('ENDED'); this.disconnect(); });
   }

@@ -15,6 +15,7 @@ import { markArrived } from '../jobs/journeyTicker';
 import { hub } from '../realtime/hub';
 import { DEMO } from '../demo/demoData';
 import type { BroadcastPayload } from '../shared/protocol';
+import { platformBridge } from '../platform/bridge';
 
 export const router = Router();
 
@@ -160,6 +161,36 @@ router.post('/v1/ops/eta-games/:id/resolve', ops, wrap(async (req, res) => {
 
 router.get('/v1/ops/journeys/:id/sos', ops, wrap(async (req, res) => {
   res.json(await prisma.sosEvent.findMany({ where: { journeyId: req.params.id }, orderBy: { createdAt: 'desc' } }));
+}));
+
+// ------------------------------------------------------ Trip Rooms bridge --
+/** Signed callbacks from the Trip Rooms platform (support replies, Ops alerts). See platform/bridge.ts. */
+router.post('/v1/platform/webhook', wrap(async (req, res) => {
+  const out = await platformBridge.handleWebhook((req as unknown as { rawBody?: Buffer }).rawBody, req.header('x-triprooms-signature'));
+  res.status(out.status).json(out.body);
+}));
+router.get('/v1/platform/status', ops, (_req, res) => { res.json(platformBridge.status()); });
+/** Vote in / answer a Trip Rooms poll or survey shown in this chat. */
+router.post('/v1/journey-chat/poll-vote', wrap(async (req, res) => {
+  const claims = chatAuth(req);
+  if (!claims) return res.status(401).json({ code: 'UNAUTHORIZED' });
+  const b = z.object({ messageId: z.string().uuid(), option: z.number().int().min(0).max(11) }).parse(req.body);
+  try { res.json(await platformBridge.vote(claims.jid, claims.seat, b.messageId, b.option)); }
+  catch (e) { res.status(409).json({ code: 'POLL_FAILED', message: (e as Error).message.includes('closed') ? 'This poll has closed.' : 'Couldn’t record your vote. Try again.' }); }
+}));
+router.post('/v1/journey-chat/survey-answer', wrap(async (req, res) => {
+  const claims = chatAuth(req);
+  if (!claims) return res.status(401).json({ code: 'UNAUTHORIZED' });
+  const b = z.object({ messageId: z.string().uuid(), answers: z.array(z.union([z.string().max(200), z.number()])).min(1).max(6) }).parse(req.body);
+  try { res.json(await platformBridge.answer(claims.jid, claims.seat, b.messageId, b.answers)); }
+  catch { res.status(409).json({ code: 'SURVEY_FAILED', message: 'Couldn’t send your answers. Try again.' }); }
+}));
+/** Passenger tapped a sponsored card (shown via the bridge): counts the click, returns the coupon. */
+router.post('/v1/journey-chat/ad-click', wrap(async (req, res) => {
+  const claims = chatAuth(req);
+  if (!claims) return res.status(401).json({ code: 'UNAUTHORIZED' });
+  const { messageId } = z.object({ messageId: z.string().min(1).max(64) }).parse(req.body);
+  res.json(await platformBridge.adClick(claims.jid, claims.seat, messageId).catch(() => ({ coupon: null })));
 }));
 
 // ------------------------------------------------------------- errors -----

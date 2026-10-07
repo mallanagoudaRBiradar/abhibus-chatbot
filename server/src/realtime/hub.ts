@@ -98,9 +98,10 @@ export class RealtimeHub {
 
   readonly msgInclude = { receipts: { select: { seatNumber: true } }, reactions: { select: { seatNumber: true, emoji: true }, orderBy: { createdAt: 'asc' } } } as const; // time order: first seat = first mover
 
-  async loadMessages(journeyId: string, roomType: RoomType, opts: { before?: Date; after?: Date; limit: number }) {
+  async loadMessages(journeyId: string, roomType: RoomType, opts: { before?: Date; after?: Date; limit: number; viewerSeat?: string }) {
     const roomId = await this.roomId(journeyId, roomType);
-    const where: Prisma.MessageWhereInput = { roomId, isHidden: false };
+    // Private messages (support replies) only ever load for the seat they were sent to.
+    const where: Prisma.MessageWhereInput = { roomId, isHidden: false, OR: [{ visibleToSeat: null }, ...(opts.viewerSeat ? [{ visibleToSeat: opts.viewerSeat }] : [])] };
     if (opts.before) where.createdAt = { lt: opts.before };
     if (opts.after) where.createdAt = { gt: opts.after };
     const rows = await prisma.message.findMany({
@@ -118,12 +119,13 @@ export class RealtimeHub {
    */
   async createMessage(journeyId: string, roomType: RoomType, data: {
     senderSeat: string | null; senderHandle: string; contentType: Exclude<ContentType, 'POLL' | 'GAME'>; payload: object; clientMsgId?: string | null; // polls and games are stored as TEXT
+    visibleToSeat?: string | null;
   }): Promise<ChatMessage> {
     const roomId = await this.roomId(journeyId, roomType);
     let row: MsgWithRel;
     try {
       row = await prisma.message.create({
-        data: { roomId, senderSeat: data.senderSeat, senderHandle: data.senderHandle, contentType: data.contentType, payload: data.payload as Prisma.InputJsonValue, clientMsgId: data.clientMsgId ?? null },
+        data: { roomId, senderSeat: data.senderSeat, senderHandle: data.senderHandle, contentType: data.contentType, payload: data.payload as Prisma.InputJsonValue, clientMsgId: data.clientMsgId ?? null, visibleToSeat: data.visibleToSeat ?? null },
         include: this.msgInclude,
       });
     } catch (e: any) {
@@ -134,6 +136,7 @@ export class RealtimeHub {
       throw e;
     }
     const dto = this.toDto(row, roomType);
+    if (data.visibleToSeat) { this.io.to(seatKey(journeyId, data.visibleToSeat)).emit(S2C.MSG_NEW, dto); return dto; } // private: that seat only
     this.io.to(roomKey(journeyId, roomType)).emit(S2C.MSG_NEW, dto);
     if (dto.senderSeat) for (const l of this.onPassengerMessage) l(journeyId, dto);
     return dto;

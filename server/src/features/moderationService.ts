@@ -19,17 +19,46 @@ import { S2C, seatKey, type ReportReason, type RoomType } from '../shared/protoc
  */
 /** Demo hook: lets simulated passengers add their reports to a real report. */
 export const reportListeners: ((journeyId: string, roomType: RoomType, reportedSeat: string, messageId: string) => void)[] = [];
-const mutedCache = new Map<string, Set<string>>(); // journeyId -> seats
+/** journeyId -> seat -> reason. Mirrors seat_mute; every write below updates both. */
+const mutedCache = new Map<string, Map<string, string>>();
+const MUTE_BY_REPORTS = 'AUTO_REPORT_THRESHOLD';
+export const MUTE_BY_STAFF = 'MUTED_BY_ABHIBUS';
 
-export async function isMuted(journeyId: string, seat: string): Promise<boolean> {
-  let set = mutedCache.get(journeyId);
-  if (!set) {
-    set = new Set((await prisma.seatMute.findMany({ where: { journeyId }, select: { seatNumber: true } })).map((m) => m.seatNumber));
-    mutedCache.set(journeyId, set);
+async function mutes(journeyId: string) {
+  let m = mutedCache.get(journeyId);
+  if (!m) {
+    m = new Map((await prisma.seatMute.findMany({ where: { journeyId }, select: { seatNumber: true, reason: true } })).map((r) => [r.seatNumber, r.reason]));
+    mutedCache.set(journeyId, m);
   }
-  return set.has(seat);
+  return m;
+}
+export async function isMuted(journeyId: string, seat: string): Promise<boolean> {
+  return (await mutes(journeyId)).has(seat);
+}
+/** What the passenger is told, by cause. Never blame other passengers for a staff action. */
+export async function muteNote(journeyId: string, seat: string): Promise<string | null> {
+  const reason = (await mutes(journeyId)).get(seat);
+  if (!reason) return null;
+  if (reason === MUTE_BY_STAFF) return 'AbhiBus has paused your messages in this chat. You can still read it, and SOS and support work as normal.';
+  if (reason === MUTE_BY_REPORTS) return 'You’ve been muted for the rest of this trip after several passengers reported your messages. You can still read the chat and use SOS.';
+  return 'You can’t post in this chat. You can still read it and use SOS.';
 }
 export const forgetMutes = (journeyId: string) => mutedCache.delete(journeyId);
+
+/** Staff mute from the Trip Rooms console. */
+export async function muteSeat(journeyId: string, seat: string) {
+  const existing = (await mutes(journeyId)).get(seat);
+  if (existing === REMOVED_REASON) return;
+  await prisma.seatMute.upsert({ where: { journeyId_seatNumber: { journeyId, seatNumber: seat } }, create: { journeyId, seatNumber: seat, reason: MUTE_BY_STAFF }, update: { reason: MUTE_BY_STAFF } });
+  (await mutes(journeyId)).set(seat, MUTE_BY_STAFF);
+  hub.emitToSeat(journeyId, seat, S2C.MUTED, { reason: await muteNote(journeyId, seat) });
+}
+/** Unmute or un-remove (staff decision, e.g. muted or removed by mistake). They can post / rejoin straight away. */
+export async function clearSeat(journeyId: string, seat: string) {
+  await prisma.seatMute.deleteMany({ where: { journeyId, seatNumber: seat } });
+  (await mutes(journeyId)).delete(seat);
+  hub.emitToSeat(journeyId, seat, S2C.UNMUTED, {});
+}
 
 export async function reportMessage(journeyId: string, reporter: { pnr: string; seat: string }, messageId: string, reason: ReportReason) {
   const msg = await prisma.message.findUnique({ where: { messageId }, include: { room: true } });
@@ -62,10 +91,10 @@ export async function reportMessage(journeyId: string, reporter: { pnr: string; 
   if (distinctReporters.length >= threshold && !(await isMuted(journeyId, msg.senderSeat))) {
     await prisma.seatMute.upsert({
       where: { journeyId_seatNumber: { journeyId, seatNumber: msg.senderSeat } },
-      create: { journeyId, seatNumber: msg.senderSeat, reason: 'AUTO_REPORT_THRESHOLD' }, update: {},
+      create: { journeyId, seatNumber: msg.senderSeat, reason: MUTE_BY_REPORTS }, update: {},
     });
-    mutedCache.get(journeyId)?.add(msg.senderSeat);
-    hub.emitToSeat(journeyId, msg.senderSeat, S2C.MUTED, { reason: 'Several passengers reported your messages.' });
+    (await mutes(journeyId)).set(msg.senderSeat, MUTE_BY_REPORTS);
+    hub.emitToSeat(journeyId, msg.senderSeat, S2C.MUTED, { reason: await muteNote(journeyId, msg.senderSeat) });
     logger.warn({ journeyId, seat: msg.senderSeat }, 'seat auto-muted after reports');
   }
   for (const l of reportListeners) l(journeyId, msg.room.roomType as RoomType, msg.senderSeat, messageId);
@@ -111,22 +140,24 @@ export async function checkMajorityRemoval(journeyId: string, roomType: RoomType
   const members = (await hub.presence(journeyId, roomType)).count;
   if (reporters.size < 2 || reporters.size <= members / 2) return;
 
+  await removeSeat(journeyId, seat, 'More than half of this chat reported your messages.', 'after reports from more than half of the passengers');
+  logger.warn({ journeyId, seat, reporters: reporters.size, members }, 'passenger removed by majority reports');
+}
+
+/** Remove a passenger for the rest of the trip: disconnected, can't rejoin, and the room is told. */
+export async function removeSeat(journeyId: string, seat: string, toThem: string, toRoom: string) {
   await prisma.seatMute.upsert({
     where: { journeyId_seatNumber: { journeyId, seatNumber: seat } },
     create: { journeyId, seatNumber: seat, reason: REMOVED_REASON }, update: { reason: REMOVED_REASON },
   });
-  mutedCache.get(journeyId)?.add(seat);
+  (await mutes(journeyId)).set(seat, REMOVED_REASON);
   const name = hub.nameOf(journeyId, seat);
-  hub.emitToSeat(journeyId, seat, S2C.REMOVED, { reason: 'More than half of this chat reported your messages.' });
+  hub.emitToSeat(journeyId, seat, S2C.REMOVED, { reason: toThem });
   setTimeout(() => hub.io.in(seatKey(journeyId, seat)).disconnectSockets(true), 500);
   for (const rt of await hub.activeRoomTypes(journeyId)) {
-    await hub.createMessage(journeyId, rt, {
-      senderSeat: null, senderHandle: 'AbhiBus', contentType: 'SYSTEM',
-      payload: { text: `🚫 ${name} was removed from this chat after reports from more than half of the passengers.` },
-    });
+    await hub.createMessage(journeyId, rt, { senderSeat: null, senderHandle: 'AbhiBus', contentType: 'SYSTEM', payload: { text: `🚫 ${name} was removed from this chat ${toRoom}.` } });
     hub.schedulePresence(journeyId, rt);
   }
-  logger.warn({ journeyId, seat, reporters: reporters.size, members }, 'passenger removed by majority reports');
 }
 
 export async function setBlock(journeyId: string, blockerSeat: string, blockedSeat: string, blocked: boolean) {

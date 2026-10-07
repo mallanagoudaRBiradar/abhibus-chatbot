@@ -41,7 +41,7 @@ const emptyRoom = (roomType: RoomType): RoomState => ({
 interface ChatState {
   session: JoinResponse | null;
   connection: 'connecting' | 'online' | 'offline';
-  closed: null | { reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED' };
+  closed: null | { reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED'; note?: string | null };
   activeRoom: RoomType;
   /** Cards the passenger tucked away (by id). The rest-stop timer comes back by itself in the last 2 minutes. */
   hiddenPins: string[];
@@ -54,13 +54,15 @@ interface ChatState {
   progress: ProgressState | null;
   landmarks: Landmark[];
   muted: boolean;
+  /** Why the passenger can't post, in words from the server (reports vs AbhiBus staff). */
+  mutedNote: string | null;
   blockedSeats: string[];
   clockOffsetMs: number;          // serverNow - deviceNow
   purgeAt: string | null;
 
   setSession(s: JoinResponse | null): void;
   setConnection(c: ChatState['connection']): void;
-  setClosed(reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED'): void;
+  setClosed(reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED', note?: string | null): void;
   setActiveRoom(r: RoomType): void;
   applySnapshot(snap: RoomSnapshot, merge: boolean): void;
   prependHistory(roomType: RoomType, msgs: ChatMessage[], hasMore: boolean): void;
@@ -75,7 +77,7 @@ interface ChatState {
   setGame(g: EtaGameState): void;
   setProgress(p: ProgressState): void;
   setTyping(roomType: RoomType, seat: string, isTyping: boolean): void;
-  setMuted(m: boolean): void;
+  setMuted(m: boolean, note?: string | null): void;
   setBlocked(seats: string[]): void;
   setPurgeAt(iso: string): void;
   reset(): void;
@@ -101,7 +103,7 @@ const patchRoom = (s: ChatState, roomType: RoomType, patch: Partial<RoomState> |
 const initial = {
   session: null, connection: 'connecting' as const, closed: null, activeRoom: 'MAIN_COMMON' as RoomType, liveShare: null, hiddenPins: [] as string[],
   rooms: { MAIN_COMMON: emptyRoom('MAIN_COMMON'), WOMEN_ONLY: emptyRoom('WOMEN_ONLY') },
-  game: null, progress: null, landmarks: [], muted: false, blockedSeats: [], clockOffsetMs: 0, purgeAt: null,
+  game: null, progress: null, landmarks: [], muted: false, mutedNote: null, blockedSeats: [], clockOffsetMs: 0, purgeAt: null,
 };
 
 export const useChat = create<ChatState>()((set, get) => ({
@@ -109,7 +111,7 @@ export const useChat = create<ChatState>()((set, get) => ({
 
   setSession: (session) => set({ session, purgeAt: session?.journey.purgeAt ?? null }),
   setConnection: (connection) => set({ connection }),
-  setClosed: (reason) => set({ closed: { reason } }),
+  setClosed: (reason, note) => set({ closed: { reason, note: note ?? null } }),
   setLiveShare: (liveShare) => set({ liveShare }),
   hidePin: (id, hidden) => set((s) => ({ hiddenPins: hidden ? [...new Set([...s.hiddenPins, id])] : s.hiddenPins.filter((x) => x !== id) })),
   setActiveRoom: (activeRoom) => set((s) => ({ activeRoom, ...patchRoom(s, activeRoom, { unread: 0 }) })),
@@ -124,6 +126,7 @@ export const useChat = create<ChatState>()((set, get) => ({
     progress: snap.progress ?? s.progress,
     landmarks: snap.landmarks.length ? snap.landmarks : s.landmarks,
     muted: snap.muted,
+    mutedNote: snap.mutedNote ?? null,
     blockedSeats: snap.blockedSeats,
     clockOffsetMs: Date.parse(snap.serverNow) - Date.now(),
   })),
@@ -176,7 +179,7 @@ export const useChat = create<ChatState>()((set, get) => ({
     if (isTyping) typing[seat] = Date.now() + 5000; else delete typing[seat];
     return { typing };
   })),
-  setMuted: (muted) => set({ muted }),
+  setMuted: (muted, note) => set({ muted, mutedNote: muted ? note ?? null : null }),
   setBlocked: (blockedSeats) => set({ blockedSeats }),
   setPurgeAt: (purgeAt) => set({ purgeAt }),
   reset: () => set({ ...initial, rooms: { MAIN_COMMON: emptyRoom('MAIN_COMMON'), WOMEN_ONLY: emptyRoom('WOMEN_ONLY') } }),

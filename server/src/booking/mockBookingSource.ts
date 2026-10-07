@@ -4,7 +4,7 @@ import { DEMO } from '../demo/demoData';
 /** Demo tickets so leadership can try the full flow without touching abrs_new. */
 export class MockBookingSource implements BookingSource {
   async findByPnr(pnr: string): Promise<BookingRecord | null> {
-    const t = DEMO.tickets.find((x) => x.pnr === pnr);
+    const t = DEMO.tickets.find((x) => x.pnr === pnr) ?? DEMO.extraTickets.get(pnr);
     if (!t) return null;
     return {
       pnr: t.pnr,

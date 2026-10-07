@@ -96,7 +96,18 @@ export interface BusLocationPayload {
 export type BroadcastPayload =
   | { kind: 'REST_STOP'; label: string; place: string | null; startedAt: string; endsAt: string; durationSec: number }
   | { kind: 'REST_STOP_ENDED'; label: string }
-  | { kind: 'ANNOUNCEMENT'; text: string };
+  | { kind: 'ANNOUNCEMENT'; text: string; from?: string; hi?: string | null; severity?: 'info' | 'warning' | 'critical' }
+  /** A support agent's private reply (Trip Rooms console). Stored with visibleToSeat: only that seat ever receives it. */
+  | { kind: 'CARE_REPLY'; text: string; from: string; ticketRef?: string }
+  /** Campaign content from the Trip Rooms console (ads, stop offers, sponsored polls, surveys). Always labelled. */
+  | { kind: 'SPONSORED'; label: 'Ad' | 'Sponsored' | 'Survey' | 'Poll'; platformMessageId: string; advertiser: string; title: string; body: string; cta: string | null; coupon: string | null; tile: string; options?: string[] }
+  /** Poll from the Trip Rooms console (Ops or a sponsor). Vote via POST /v1/journey-chat/poll-vote; your vote is reaction `pv:<i>`. */
+  | { kind: 'POLL_CARD'; platformMessageId: string; by: string; question: string; options: string[]; sponsored: boolean; closesAt: string | null }
+  /** Survey (research or sponsored). Answer via POST /v1/journey-chat/survey-answer; answered = reaction `sv:done`. */
+  | { kind: 'SURVEY_CARD'; platformMessageId: string; by: string; sponsored: boolean; questions: { type: 'rating' | 'choice' | 'text'; q: string; options?: string[] }[] };
+/** Reaction keys the server writes for console polls/surveys (never sent by clients). */
+export const CARD_VOTE_PREFIX = 'pv:';
+export const CARD_SURVEY_DONE = 'sv:done';
 export interface LandmarkPayload {
   landmarkId: string;
   pointName: string;           // "Kurnool"
@@ -112,8 +123,13 @@ export const MENTIONABLES = [
   { id: 'CARE', handle: 'AbhiBus Care', title: 'AbhiBus Customer Care', subtitle: 'Get help from our support team' },
 ] as const;
 export type MentionId = (typeof MENTIONABLES)[number]['id'];
+/** Every way to call the support desk: "@AbhiBus Care", "@care", "@support", "@customer"… (same list as the Trip Rooms platform). */
+export const CARE_ALIASES = ['care', 'support', 'customer care', 'customer support', 'customercare', 'customer', 'helpdesk'];
+const escRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const isCareMention = (text: string) =>
+  ['abhibus care', ...CARE_ALIASES].some((h) => new RegExp(`(^|[^\\w@])@${escRe(h)}(?![\\w])`, 'i').test(text ?? ''));
 export const mentionsIn = (text: string): MentionId[] =>
-  MENTIONABLES.filter((m) => text.toLowerCase().includes(`@${m.handle.toLowerCase()}`)).map((m) => m.id);
+  MENTIONABLES.filter((m) => (m.id === 'CARE' ? isCareMention(text) : text.toLowerCase().includes(`@${m.handle.toLowerCase()}`))).map((m) => m.id);
 
 // ---------------------------------------------------------- live location --
 export const LIVE_LOCATION_MINUTES = [10, 15, 20] as const;
@@ -284,6 +300,8 @@ export interface RoomSnapshot {
   progress: ProgressState | null;
   landmarks: Landmark[];
   muted: boolean;
+  /** Why, in words for the passenger (reports by passengers vs AbhiBus staff). */
+  mutedNote?: string | null;
   blockedSeats: string[];
   serverNow: string;
 }
@@ -351,6 +369,7 @@ export const S2C = {
   PROGRESS: 'progress:update',       // ProgressState
   TYPING: 'typing',                  // { roomType, seat, isTyping }
   MUTED: 'moderation:muted',         // { reason }
+  UNMUTED: 'moderation:unmuted',     // {}
   REMOVED: 'moderation:removed',     // { reason } — reported by more than half the room; removed for good
   JOURNEY_ENDING: 'journey:ending',  // { purgeAt }
   JOURNEY_CLOSED: 'journey:closed',  // {}

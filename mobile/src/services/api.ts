@@ -54,6 +54,13 @@ export const api = {
   joinQr: (body: { token: string; deviceId: string; coords: { lat: number; lng: number } | null; profile: ProfileInput }) =>
     request<JoinResponse & { qrCheck: QrJoinCheck }>('/v1/journey-chat/join-qr', { method: 'POST', body: JSON.stringify(body) }),
   demoTickets: () => request<{ tickets: { pnr: string; label: string; seats: string[] }[] }>('/v1/demo/tickets', { timeoutMs: 5000 }),
+  pollVote: (token: string, messageId: string, option: number) =>
+    request<{ results: { option: string; votes: number }[] }>('/v1/journey-chat/poll-vote', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ messageId, option }), timeoutMs: 8000 }),
+  surveyAnswer: (token: string, messageId: string, answers: (string | number)[]) =>
+    request<{ recorded: boolean }>('/v1/journey-chat/survey-answer', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ messageId, answers }), timeoutMs: 8000 }),
+  /** Tap on a sponsored card: counted on the campaign (once per passenger); returns the coupon to show. */
+  adClick: (token: string, messageId: string) =>
+    request<{ coupon: string | null }>('/v1/journey-chat/ad-click', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ messageId }), timeoutMs: 8000 }),
   sos: (token: string) =>
     request<{ incidentId: string; placeLabel: string | null; supportPhone: string | null; emergencyNumber: string }>('/v1/journey-chat/sos', {
       method: 'POST', headers: { authorization: `Bearer ${token}` }, timeoutMs: 15_000,

@@ -105,7 +105,7 @@ export function BusChatScreen({ onBack }: { onBack: () => void }) {
     useChat.getState().reset();
   };
 
-  if (closed) return <ClosedState reason={closed.reason} onDone={leave} />;
+  if (closed) return <ClosedState reason={closed.reason} note={closed.note} onDone={leave} />;
 
   return (
     <View style={styles.root}>
@@ -165,7 +165,7 @@ function LiveShareBanner() {
   );
 }
 
-function ClosedState({ reason, onDone }: { reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED'; onDone: () => void }) {
+function ClosedState({ reason, note, onDone }: { reason: 'ENDED' | 'UNAUTHORIZED' | 'REMOVED'; note?: string | null; onDone: () => void }) {
   const insets = useSafeAreaInsets();
   const ended = reason === 'ENDED';
   const removed = reason === 'REMOVED';
@@ -175,7 +175,7 @@ function ClosedState({ reason, onDone }: { reason: 'ENDED' | 'UNAUTHORIZED' | 'R
       <Txt v="h2" style={{ textAlign: 'center' }}>{removed ? 'You’ve been removed from this chat' : ended ? 'This trip chat has ended' : 'Your session expired'}</Txt>
       <Txt v="body" color={palette.textSecondary} style={{ textAlign: 'center' }}>
         {removed
-          ? 'More than half of the passengers in this chat reported your messages, so you can’t rejoin this trip’s chat. SOS and AbhiBus support still work as normal.'
+          ? `${note ?? 'You can’t rejoin this trip’s chat.'} SOS and AbhiBus support still work as normal.`
           : ended ? 'Messages from this trip have been deleted. Thanks for travelling with AbhiBus.' : 'Open the chat again from your trip in the AbhiBus app.'}
       </Txt>
       <Pressable onPress={onDone} style={styles.closedBtn} accessibilityRole="button">

@@ -106,7 +106,8 @@ function containsProfanity(text: string): boolean {
 }
 
 /** In-app @mentions (e.g. "@AbhiBus Care") are allowed; any other @handle is still treated as a social handle. */
-const ALLOWED_MENTIONS = /@abhibus care\b/gi;
+// Tags that reach the AbhiBus Care desk (kept equal to CARE_ALIASES in protocol.ts) are not social handles.
+const ALLOWED_MENTIONS = /@(?:abhibus care|customer care|customer support|customercare|customer|care|support|helpdesk)\b/gi;
 
 export function checkMessage(raw: string): ModerationResult {
   const text = normaliseBase(raw ?? '');

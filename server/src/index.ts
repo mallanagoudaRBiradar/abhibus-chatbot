@@ -13,13 +13,15 @@ import { startExpirySweeper } from './jobs/expirySweeper';
 import { startDemoSimulator } from './demo/simulator';
 import { DEMO } from './demo/demoData';
 import { journeyIdFor } from './booking/types';
+import { platformBridge } from './platform/bridge';
 
 async function main() {
   const app = express();
   app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigins }));
-  app.use(express.json({ limit: '16kb' }));
+  // Keep the raw body: the Trip Rooms webhook is verified by HMAC over the exact bytes.
+  app.use(express.json({ limit: '16kb', verify: (req, _res, buf) => { (req as unknown as { rawBody: Buffer }).rawBody = buf; } }));
   app.use(router);
 
   const server = http.createServer(app);
@@ -40,6 +42,7 @@ async function main() {
     await startDemoSimulator();
   }
 
+  void platformBridge.start(); // retries in the background until the platform is reachable
   initMiniGames();
   startJourneyTicker();
   startExpirySweeper();
