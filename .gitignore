@@ -6,3 +6,7 @@ android/
 .env
 *.log
 .DS_Store
+
+# Raw AbhiBus API samples contain real personal data; anonymised copies live in server/scripts/fixtures/
+/getTicket.json
+/cancelTicket.json

@@ -1,10 +1,9 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, useReducedMotion } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons } from './icons';
+import * as Haptics from '../services/haptics';
 import { Txt } from './Txt';
-import { seatHue } from '../utils/seat';
 import { Avatar } from './Avatar';
 import type { Rect } from './MessageMenu';
 import { personFrom, nameList } from '../hooks/usePeople';
@@ -16,14 +15,17 @@ import { LocationCard } from './LocationCard';
 import { LandmarkCard } from './LandmarkCard';
 import { BroadcastRow, SystemRow } from './BroadcastRow';
 import { clock } from '../utils/format';
-import { byMode, motion, palette, radius, roomTheme, themed } from '../theme/tokens';
+import { TEXT_SCALE, useSettings } from '../store/settings';
+import { motion, palette, radius, roomTheme, themed, useThemeMode } from '../theme/tokens';
 import type { UiMessage } from '../store/chatStore';
 import { MENTIONABLES, isSystemReactionKey, mentionsIn, type ReactionEmoji, type RoomType } from '../shared/protocol';
 
 /**
  * One row in the chat. Handles:
- *  - identity: name + avatar (WhatsApp-group style: avatar beside the last
- *    message of a run, name on the first). Seat numbers are never shown.
+ *  - identity: avatar + name + "On board" pill above the first message of a run
+ *    (grey bubbles; mine are solid red, right-aligned). Seat numbers are never shown.
+ *  - time below the last bubble of a run
+ *  - "where is the bus?" asks render as a card with a Share my location button
  *  - grouping: consecutive messages from the same person within 3 min share one
  *    name and one avatar (less noise on a busy bus)
  *  - @AbhiBus Care mentions are highlighted with a "Care will be notified" line
@@ -53,6 +55,8 @@ export interface MessageRowProps {
   onOpenVotes: (m: UiMessage) => void;
   onGameMove: (m: UiMessage, move: GameMoveInput) => void;
   onOpenReactions: (m: UiMessage) => void;
+  /** "Share my location" on someone's where-is-the-bus request. */
+  onShareLocation: () => void;
 }
 
 const sameGroup = (a?: UiMessage, b?: UiMessage) =>
@@ -62,6 +66,8 @@ const sameGroup = (a?: UiMessage, b?: UiMessage) =>
 
 function MessageRowImpl(props: MessageRowProps) {
   const { message: m, prev, next, mySeat, roomType } = props;
+  const textScale = TEXT_SCALE[useSettings((s) => s.textSize)];
+  useThemeMode(); // memoized row: repaint on Light/Dark
   const theme = roomTheme[roomType];
   const showSeparator = !prev || Date.parse(m.createdAt) - Date.parse(prev.createdAt) > 15 * 60_000;
 
@@ -92,14 +98,18 @@ function MessageRowImpl(props: MessageRowProps) {
   const seenCount = m.seenBy.length;
   const reactionEntries = Object.entries(m.reactions).filter(([k, seats]) => seats.length > 0 && !isSystemReactionKey(k)); // poll votes / game moves ride the reactions channel
   const showSender = !mine && firstInGroup && !!m.senderSeat;
-  const showAvatar = !mine && lastInGroup && !!m.senderSeat;
-  const senderColor = nameColor(m.senderHandle);
+  const showAvatar = showSender; // avatar sits beside the name, at the top of a run
   const senderLabel = showSender ? (
     <View style={styles.senderRow}>
-      <Txt v="smallStrong" color={senderColor} numberOfLines={1} style={{ flexShrink: 1 }}>{m.senderHandle}</Txt>
-      {m.senderGuest && <View style={styles.guestTag}><Txt v="micro" color={palette.textSecondary}>🎟️ QR guest</Txt></View>}
+      <Txt v="smallStrong" color={palette.text} numberOfLines={1} style={{ flexShrink: 1 }}>{m.senderHandle}</Txt>
+      {m.senderGuest ? (
+        <View style={styles.guestTag}><Txt v="micro" color={palette.textSecondary}>🎟️ QR guest</Txt></View>
+      ) : m.senderOnBoard ? (
+        <View style={styles.onBoard}><View style={styles.onBoardDot} /><Txt v="micro" color={palette.green}>On board</Txt></View>
+      ) : null}
     </View>
   ) : null;
+  const askLocation = m.contentType === 'TEXT' && m.payload.ask === 'LOCATION' && !mine;
   const careMentioned = m.contentType === 'TEXT' && (m.payload.mentions?.includes('CARE') || mentionsIn(m.payload.text ?? '').includes('CARE'));
 
   // Double-tap or long-press opens the reaction bar + actions, anchored to this bubble.
@@ -128,40 +138,33 @@ function MessageRowImpl(props: MessageRowProps) {
   ) : null;
 
   let content: React.ReactNode;
-  if (m.contentType === 'TEXT') {
-    // Time sits inside the bubble's last line (WhatsApp-style): an invisible
-    // spacer reserves room so the absolutely-positioned stamp never overlaps text.
+  if (askLocation) {
+    content = <LocationAsk name={m.senderHandle} waitingAt={m.payload.waitingAt ?? null} text={m.payload.text} onShare={props.onShareLocation} />;
+  } else if (m.contentType === 'TEXT') {
     content = (
       <View style={[
         styles.bubble,
-        mine ? { backgroundColor: theme.tint, borderColor: theme.border } : styles.bubbleOther,
-        mine ? (lastInGroup ? styles.tailMine : null) : (lastInGroup ? styles.tailOther : null),
-        m.status === 'failed' && { borderColor: palette.red, backgroundColor: palette.redSoft },
+        mine ? { backgroundColor: theme.mine } : styles.bubbleOther,
+        firstInGroup && (mine ? styles.headMine : styles.headOther),
+        m.status === 'failed' && { borderWidth: 1, borderColor: palette.red, backgroundColor: palette.redSoft },
       ]}>
-        {senderLabel}
         {/* On web, double-click is the reaction gesture, so don't let it select a word. */}
-        <Txt v="body" selectable={Platform.OS !== 'web'}>
-          {withMentions(m.payload.text, theme.accent)}
-          <Txt v="micro" style={styles.spacer}>{`\u2003${time}${mine ? '\u2003\u2002' : ''}`}</Txt>
+        <Txt v="body" selectable={Platform.OS !== 'web'} color={mine && m.status !== 'failed' ? theme.onMine : palette.text}
+          style={textScale !== 1 ? { fontSize: 15 * textScale, lineHeight: 21 * textScale } : undefined}>
+          {withMentions(m.payload.text, mine ? theme.onMine : theme.accent)}
         </Txt>
-        <View style={styles.stamp}>
-          <Txt v="micro" color={palette.textTertiary}>{time}</Txt>
-          {ticks}
-        </View>
       </View>
     );
   } else if (m.contentType === 'POLL') {
     content = (
-      <View style={[styles.bubble, styles.pollBubble, mine ? { backgroundColor: theme.tint, borderColor: theme.border } : styles.bubbleOther]}>
-        {senderLabel}
+      <View style={[styles.bubble, styles.pollBubble, mine ? { backgroundColor: theme.tint, borderWidth: 1, borderColor: theme.border } : styles.bubbleOther]}>
         <PollCard poll={m.payload} reactions={m.reactions} mySeat={mySeat} accent={theme.accent} pending={m.status !== 'sent'}
           onVote={(opts) => props.onVote(m, opts)} onOpenVotes={() => props.onOpenVotes(m)} />
       </View>
     );
   } else if (m.contentType === 'GAME') {
     content = (
-      <View style={[styles.bubble, styles.pollBubble, mine ? { backgroundColor: theme.tint, borderColor: theme.border } : styles.bubbleOther]}>
-        {senderLabel}
+      <View style={[styles.bubble, styles.pollBubble, mine ? { backgroundColor: theme.tint, borderWidth: 1, borderColor: theme.border } : styles.bubbleOther]}>
         <GameCard game={m.payload} reactions={m.reactions} mySeat={mySeat} accent={theme.accent} createdAt={m.createdAt}
           onMove={(mv) => props.onGameMove(m, mv)} />
       </View>
@@ -173,21 +176,19 @@ function MessageRowImpl(props: MessageRowProps) {
   } else if (m.contentType === 'LANDMARK') {
     content = <LandmarkCard payload={m.payload} />;
   }
-  const isText = m.contentType === 'TEXT';
-  const ownBubble = isText || m.contentType === 'POLL' || m.contentType === 'GAME'; // sender name drawn inside the bubble
 
   // One wrapping View: inverted lists can reverse sibling order inside a cell.
   return (
     <View>
       {separator}
-      <Animated.View style={[styles.row, mine ? styles.rowMine : styles.rowOther, { marginTop: firstInGroup ? 10 : 3 }, enterStyle]}>
+      <Animated.View style={[styles.row, mine ? styles.rowMine : styles.rowOther, { marginTop: firstInGroup ? 14 : 3 }, enterStyle]}>
         {!mine && m.senderSeat && (
           <View style={styles.avatarCol}>
-            {showAvatar && <Avatar name={m.senderHandle} avatar={m.senderAvatar} size={28} />}
+            {showAvatar && <Avatar name={m.senderHandle} avatar={m.senderAvatar} size={34} />}
           </View>
         )}
-        <View style={[styles.col, mine ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
-          {showSender && !ownBubble && <View style={styles.senderOutside}>{senderLabel}</View>}
+        <View style={[styles.col, askLocation && styles.colWide, mine ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+          {showSender && <View style={styles.senderOutside}>{senderLabel}</View>}
           <View style={[styles.bubbleLine, mine && { flexDirection: 'row-reverse' }]}>
             <Pressable
               onPress={onTap}
@@ -197,7 +198,7 @@ function MessageRowImpl(props: MessageRowProps) {
               onHoverOut={() => setHover(false)}
               disabled={m.status !== 'sent'}
               accessibilityHint="Double-tap or long press to react, report or block"
-              style={{ maxWidth: '100%', flexShrink: 1 }}
+              style={{ maxWidth: '100%', flexShrink: 1, ...(askLocation ? { flex: 1 } : null) }}
             >
               <View ref={bubbleRef} collapsable={false}>{content}</View>
             </Pressable>
@@ -232,7 +233,7 @@ function MessageRowImpl(props: MessageRowProps) {
               <Txt v="meta" color={palette.red} style={{ flexShrink: 1 }}>{`${m.failReason ?? 'Not sent'} · Tap to retry`}</Txt>
             </Pressable>
           )}
-          {!isText && lastInGroup && m.status !== 'failed' && (
+          {lastInGroup && m.status !== 'failed' && (
             <View style={[styles.metaOutside, mine && { alignSelf: 'flex-end' }]}>
               <Txt v="micro" color={palette.textTertiary}>{time}</Txt>
               {ticks}
@@ -249,6 +250,27 @@ function MessageRowImpl(props: MessageRowProps) {
   );
 }
 
+/** Someone waiting for the bus asked where it is: riders on board can answer with one tap. */
+function LocationAsk({ name, waitingAt, text, onShare }: { name: string; waitingAt: string | null; text: string; onShare: () => void }) {
+  return (
+    <View style={styles.ask}>
+      <View style={styles.askHead}>
+        <View style={styles.askIcon}><Ionicons name="location" size={16} color={palette.red} /></View>
+        <Txt v="bodyStrong" style={{ flex: 1 }}>
+          {waitingAt ? `${name} is waiting at ${waitingAt} and asked for the bus’s live location` : `${name} asked for the bus’s live location`}
+        </Txt>
+      </View>
+      <View style={styles.askQuote}><Txt v="body" color={palette.textSecondary}>{`“${text}”`}</Txt></View>
+      <Txt v="meta" color={palette.textSecondary}>If you’re on the bus, your location shows them exactly where it is.</Txt>
+      <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onShare(); }} style={({ pressed }) => [styles.askBtn, pressed && { opacity: 0.85 }]}
+        accessibilityRole="button" accessibilityLabel={`Share my location with ${name}`}>
+        <Ionicons name="locate" size={17} color={palette.onCyan} />
+        <Txt v="bodyStrong" color={palette.onCyan}>Share my location</Txt>
+      </Pressable>
+    </View>
+  );
+}
+
 /** Highlight @AbhiBus Care (and any future mentionables) inside message text. */
 function withMentions(text: string, accent: string): React.ReactNode {
   const handles = MENTIONABLES.map((x) => `@${x.handle}`);
@@ -259,8 +281,6 @@ function withMentions(text: string, accent: string): React.ReactNode {
     ? <Txt key={i} v="bodyStrong" color={accent}>{part}</Txt>
     : part));
 }
-
-const nameColor = (name: string) => byMode({ dark: `hsl(${seatHue(name)}, 62%, 72%)`, light: `hsl(${seatHue(name)}, 58%, 36%)` });
 
 function ReactionChip({ emoji, count, active, accent, onPress, onLongPress }: { emoji: string; count: number; active: boolean; accent: string; onPress: () => void; onLongPress: () => void }) {
   const s = useSharedValue(1);
@@ -285,30 +305,36 @@ export const MessageRow = memo(MessageRowImpl, (a, b) =>
 const styles = themed(() => ({
   separator: { alignItems: 'center', marginTop: 16, marginBottom: 4 },
   sepPill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: radius.pill, backgroundColor: palette.surface },
-  row: { paddingHorizontal: 10, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  row: { paddingHorizontal: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   rowMine: { justifyContent: 'flex-end' },
   rowOther: { justifyContent: 'flex-start' },
-  avatarCol: { width: 28, marginBottom: 2 },
-  col: { maxWidth: '80%' },
-  senderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 1 },
-  guestTag: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, backgroundColor: palette.surfaceRaised },
-  senderOutside: { marginBottom: 4, marginLeft: 4 },
+  avatarCol: { width: 34 },
+  col: { maxWidth: '78%' },
+  colWide: { flex: 1, maxWidth: '86%' },
+  senderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  guestTag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: palette.surfaceRaised },
+  onBoard: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: palette.greenSoft },
+  onBoardDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.green },
+  senderOutside: { marginBottom: 5, marginLeft: 2 },
   bubbleLine: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%' },
   hoverBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.surfaceRaised, borderWidth: 1, borderColor: palette.hairline },
   careLine: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, marginHorizontal: 4 },
-  bubble: { paddingHorizontal: 12, paddingTop: 7, paddingBottom: 7, borderRadius: radius.bubble, borderWidth: 1 },
+  bubble: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.bubble },
   pollBubble: { paddingTop: 10, paddingBottom: 8 },
-  bubbleOther: { backgroundColor: palette.surface, borderColor: palette.hairline },
-  tailMine: { borderBottomRightRadius: 6 },
-  tailOther: { borderBottomLeftRadius: 6 },
-  spacer: { opacity: 0, color: 'transparent' },
-  stamp: { position: 'absolute', right: 10, bottom: 6, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  bubbleOther: { backgroundColor: palette.surface },
+  headMine: { borderTopRightRadius: 6 },
+  headOther: { borderTopLeftRadius: 6 },
+  ask: { padding: 14, gap: 10, borderRadius: radius.bubble, borderTopLeftRadius: 6, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.hairlineStrong },
+  askHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  askIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: palette.redSoft, alignItems: 'center', justifyContent: 'center' },
+  askQuote: { borderLeftWidth: 3, borderLeftColor: palette.hairlineStrong, paddingLeft: 10, paddingVertical: 2 },
+  askBtn: { flexDirection: 'row', gap: 8, height: 44, borderRadius: radius.pill, backgroundColor: palette.red, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
   reactions: { flexDirection: 'row', gap: 5, marginTop: 4, flexWrap: 'wrap' },
   reaction: {
     flexDirection: 'row', alignItems: 'center', gap: 4, height: 24, paddingHorizontal: 7,
     borderRadius: radius.pill, backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairline,
   },
-  metaOutside: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, marginHorizontal: 4 },
+  metaOutside: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5, marginHorizontal: 4 },
   failRow: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 300, marginTop: 4 },
   seenBy: { marginTop: 3, marginRight: 4, textAlign: 'right' },
 }));

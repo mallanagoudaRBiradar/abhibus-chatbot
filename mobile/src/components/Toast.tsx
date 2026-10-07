@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { FadeInUp, FadeOutUp } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons } from './icons';
 import { Txt } from './Txt';
 import { palette, radius, themed } from '../theme/tokens';
 
@@ -27,7 +27,7 @@ export function ToastHost() {
   const icon = current.tone === 'success' ? 'checkmark-circle' : current.tone === 'danger' ? 'alert-circle' : 'information-circle';
   const color = current.tone === 'success' ? palette.green : current.tone === 'danger' ? palette.red : palette.textSecondary;
   return (
-    <View pointerEvents="none" style={[styles.host, { top: insets.top + 8 }]}>
+    <View style={[styles.host, { top: insets.top + 8, pointerEvents: 'none' }]}>
       <Animated.View key={current.id} entering={FadeInUp.duration(220)} exiting={FadeOutUp.duration(180)} style={styles.toast} accessibilityLiveRegion="polite">
         <Ionicons name={icon} size={18} color={color} />
         <Txt v="smallStrong" style={{ flexShrink: 1 }}>{current.text}</Txt>

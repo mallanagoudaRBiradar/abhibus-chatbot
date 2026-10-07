@@ -12,6 +12,7 @@ import { getTenant } from './tenants';
 import { config } from '../config';
 import { AVATARS, DISPLAY_NAME_RE } from '../shared/protocol';
 import { checkMessage } from '../shared/moderation';
+import { strs } from '../lib/json';
 
 export const MemberInZ = z.object({
   external_user_id: z.string().min(1).max(80),
@@ -94,7 +95,7 @@ export async function moveMembers(tenantId: string, fromId: string, toId: string
   const members = await prisma.member.findMany({ where: { id: { in: memberIds }, roomId: fromId } });
   const moved = await addMembers(to, members.map((m) => ({
     external_user_id: m.externalUserId, booking_ref: m.bookingRef, segment: m.segmentFrom ? { from: m.segmentFrom, to: m.segmentTo ?? '' } : undefined,
-    party_size: m.partySize, seat_refs: m.seatRefs, chart_status: (m.chartStatus as any) ?? undefined, locale: m.locale, gender: m.gender,
+    party_size: m.partySize, seat_refs: strs(m.seatRefs), chart_status: (m.chartStatus as any) ?? undefined, locale: m.locale, gender: m.gender,
   })), actor);
   for (const m of members) await removeMember(from, m, reason === 'charting' ? 'moved_to_coach' : 'moved', actor);
   if (moved.length) await createMessage(to.id, 'MAIN_COMMON', { senderName: 'System', contentType: 'SYSTEM', payload: { text: reason === 'charting' ? `Chart prepared: ${moved.length} traveller${moved.length > 1 ? 's' : ''} moved into this coach room.` : `${moved.length} traveller${moved.length > 1 ? 's' : ''} joined from another trip.` } });

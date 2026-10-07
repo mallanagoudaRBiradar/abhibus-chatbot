@@ -8,12 +8,20 @@ Temporary, trip-scoped group rooms that **AbhiBus, ConfirmTkt, ixigo Trains and 
 | Console | `platform/dashboard` | 5180 | Sign-in for **Admin, Ops, Support, Marketing, Developer, Viewer** |
 | Hosted chat screen | `platform/chat` | 8090 | The traveller screen every app opens in a WebView / iframe |
 
-Data: local Postgres database **`trip_rooms`** only. The platform never connects to `abrs_new`.
+Data: local MySQL database **`trip_rooms`** only (no Docker). The platform never connects to `abrs_new`.
 
 ## Run it
 
 ```bash
-./scripts/platform-dev.sh
+# once: database + user on your local MySQL 8+
+mysql -u root <<'SQL'
+CREATE DATABASE trip_rooms CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'trip_rooms'@'localhost' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON trip_rooms.* TO 'trip_rooms'@'localhost';
+SQL
+cp platform/server/.env.example platform/server/.env   # set DATABASE_URL and the secrets
+
+./scripts/platform-dev.sh        # applies migrations, then starts server, console and chat screen
 ```
 
 Then open **http://localhost:5180** and tap a demo account (password `TripRooms@2026`):

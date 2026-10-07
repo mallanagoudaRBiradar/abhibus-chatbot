@@ -1,0 +1,324 @@
+{
+  "status": "Success",
+  "reference": "OB185080Z4M",
+  "ticketList": [
+    {
+      "PNR": "DZ0000003135",
+      "additional_info": "{\"DP\": \"124^Hayathnagar^23:50\", \"asf\": {\"onw\": {\"allPolicies\": [{\"id\": \"203\", \"seatNos\": \"4U,8U,16\"}]}}, \"atm\": \"11:00:00\", \"bdt\": \"2026-10-07 17:30\", \"ddt\": \"2026-10-07 23:50\", \"esf\": {\"onw\": {\"fares\": {\"1075\": 967.5}, \"policy\": \"29576\", \"discountAmount\": 107.5}}, \"ttm\": \"14:00:00\", \"bpId\": \"91\", \"disRt\": \"0\", \"oprRt\": \"0.00\", \"disGst\": \"0\", \"pgmode\": \"\", \"allSrid\": \"REDACTED\", \"cbpName\": \"\", \"cdpName\": \"\", \"gstMode\": \"op\", \"paytype\": \"psdk\", \"booktype\": \"nextgenmweb\", \"cardType\": \"\", \"payerVpa\": \"\", \"srvRtCnt\": 0, \"tripType\": \"O\", \"accountId\": 350, \"bpLatLong\": \"17.44601847334092, 78.37607690613669\", \"cardBrand\": \"REDACTED\", \"discounts\": {\"ad\": 107.5, \"ed\": 107.5}, \"dpLatLong\": \"17.32745, 78.601607\", \"isNewUser\": \"1\", \"psdkRefId\": \"\", \"sharingED\": 107.5, \"cardIssuer\": \"REDACTED\", \"fc_assured\": \"1\", \"haltEvents\": {\"charged\": {\"email\": \"test.passenger@example.com\", \"amount\": 913.75, \"is_rtc\": 0, \"safe_t\": \"0\", \"version\": \"4.7.0\", \"business\": \"bus\", \"platform\": \"ab-mobile-new\", \"bus_jdate\": \"$D_1791397800\", \"bus_route\": \"Hyderabad - Bangalore\", \"edge_deal\": \"No\", \"isAssured\": \"true\", \"account_id\": \"302\", \"bus_source\": \"Hyderabad\", \"is_student\": 0, \"service_id\": \"4512648998\", \"total_fare\": 913.75, \"coupon_used\": \"\", \"operator_id\": \"120849\", \"psdkversion\": \"v10\", \"bus_isreturn\": false, \"charged_time\": \"07 Oct 2026 03:46 PM\", \"clevertap_id\": null, \"origin_click\": \"others\", \"ttd_selected\": false, \"abhicash_used\": false, \"boarding_time\": \"20:50\", \"bus_route-doj\": \"Hyderabad-Bangalore-2026-10-08\", \"bus_source_id\": \"3\", \"contact_email\": \"test.passenger@example.com\", \"exp_uber_seat\": \"A\", \"operator_name\": \"Fresh Bus Electric\", \"platform_name\": \"nextgenmweb\", \"contact_number\": \"9000000001\", \"coupon_applied\": false, \"days_in_future\": \"0\", \"hrs_in_advance\": \"29_hrs\", \"isfirstbooking\": \"true\", \"meta_tag_shown\": false, \"prime_selected\": false, \"sponsored_card\": false, \"bus_destination\": \"Bangalore\", \"bus_onward_fare\": \"950\", \"bus_total_seats\": 3, \"exp_srp_outlier\": \"no\", \"onward_bus_make\": \"AC Seater/Sleeper (2 + 1)\", \"onward_bus_type\": \"\", \"saved_card_used\": false, \"position_changed\": false, \"bus_onward_is_rtc\": false, \"exp_ixigo_payment\": \"B\", \"exp_service_cards\": \"1\", \"istravelguarantee\": false, \"bus_departure_date\": \"2026-10-08\", \"bus_departure_time\": \"08:50 PM\", \"bus_destination_id\": \"7\", \"isFreecancellation\": \"false\", \"meta_tag_available\": false, \"onward_operator_id\": \"120849\", \"unique_service_key\": \"150\", \"bus_onward_bus_deck\": \"Upper\", \"bus_onward_operator\": \"Fresh Bus Electric\", \"exp_feat_getbuslist\": \"v1\", \"onward_seater_count\": 0, \"origin_source_click\": \"others\", \"prime_type_selected\": false, \"bus_onward_seat_type\": \"\", \"onward_sleeper_count\": 1, \"unique_operator_name\": \"Fresh Bus Electric\", \"bus_journey_date_time\": \"Wed, 07 Oct 2026 18:30:00 GMT\", \"bus_onward_seat_count\": 1, \"contact_number_change\": false, \"exp_srp_sort_weighted\": \"C\", \"isSeatLayoutV1Enabled\": true, \"exp_seatlayout_version\": \"V1\", \"isTravelGuaranteeCheck\": \"no\", \"istravelguaranteeopted\": false, \"bus_onward_seater_count\": 0, \"isAssuredChargesChecked\": \"no\", \"addon_preference_profile\": \"false\", \"bus_onward_sleeper_count\": 1, \"srp_card_position_actual\": 1, \"srp_card_position_change\": 0, \"whatsapp_booking_details\": false, \"bus_onward_is_single_lady\": false, \"isFreecancellationChecked\": \"no\", \"exp_seatlayout_mobile_apis\": \"2291\", \"exp_seatlayout_desktop_apis\": \"2291\", \"exp_sponsored_listing_clicks\": \"A\", \"bus_name1\": \"Arjun\", \"bus_gender1\": \"M\", \"bus_name2\": \"Divya\", \"bus_gender2\": \"F\", \"bus_name3\": \"Kiran\", \"bus_gender3\": \"M\"}}, \"isTopTrust\": \"\", \"operatorId\": \"120849\", \"clevertapID\": \"REDACTED\", \"environment\": \"php7\", \"isFCEnabled\": \"0\", \"isTGEnabled\": \"0\", \"rsaAvailable\": \"1\", \"cancellations\": [{\"cc\": \"Rs. 914\", \"rp\": \"85%\", \"tl\": \"Rs 914 /- @ 85% refund\", \"con\": \"Before 07-Oct 19:50\"}, {\"cc\": \"Rs. 860\", \"rp\": \"80%\", \"tl\": \"Rs 860 /- @ 80% refund\", \"con\": \"Between 07-Oct 19:50 & 08-Oct 07:50\"}, {\"cc\": \"Rs. 538\", \"rp\": \"50%\", \"tl\": \"Rs 538 /- @ 50% refund\", \"con\": \"Between 08-Oct 07:50 & 08-Oct 13:50\"}, {\"cc\": \"Rs. 0\", \"rp\": \"0%\", \"tl\": \"Rs 0 /- @ 0% refund\", \"con\": \"After 08-Oct 13:50\"}], \"returnExpDate\": \"2026-10-23\", \"seatWiseFares\": {\"11U\": \"1075\"}, \"abhiEdgeDisAmt\": 107.5, \"cardLastNumber\": \"REDACTED\", \"edgeOperatorId\": 759, \"returnEligible\": 1, \"returnNoOfDays\": \"15\", \"edgeOfferTypeID\": 1, \"abhiEdgePolicyId\": \"203\", \"isAssuredEnabled\": \"1\", \"origin_date_time\": \"2026-10-07 16:35\", \"TravelerAgentName\": \"Fresh Bus Electric\", \"bankTransactionId\": \"\", \"returnDiscountPer\": \"10\", \"abhiEdgeOperatorId\": 759, \"abhiEdgeOfferTypeID\": 1, \"abhiEdgeofferApplied\": 1, \"return_discount_details\": {\"id\": \"29565\", \"days\": \"Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday\", \"disDesc\": \"4\", \"disName\": \"Return Journey Offer\", \"disType\": \"Percent\", \"calcDisc\": 107.5, \"dealType\": \"returntrip\", \"disValue\": \"10\", \"disToDate\": \"0000-00-00\", \"offerType\": \"4\", \"disToJDate\": \"2027-01-03\", \"operatorId\": 759, \"disFromDate\": \"0000-00-00\", \"retNoOfDays\": \"15\", \"disFromJDate\": \"2026-10-06\", \"disMaxdisAmt\": \"5000.00\", \"disMinTicketValue\": \"10.00\"}}",
+      "Collect_Mode": "IRZ",
+      "ServiceKey": "51",
+      "From": "Vijayawada",
+      "To": "Hyderabad",
+      "JourneyDate": "07-10-2026",
+      "Passenger1": "(,M)",
+      "SelectedSeats": "4U,8U,16",
+      "CustPhoneNumber": "9000000001",
+      "CustEmail": "test.passenger@example.com",
+      "Original_Fare": "1075.00",
+      "Original_Amt": "1075.00",
+      "travelerPartnerId": "7",
+      "Discount": "215.00",
+      "Fare": "913.75",
+      "Status": "Cancelled",
+      "Operator_PNR": "FRE685685 ",
+      "layouttype": "AC Sleeper",
+      "Service_Name": "Guntur To Hyderabad 16:00",
+      "Service_Number": "GNT-HYD-AC-SE-SL-1615",
+      "Reporting_Time": "08:35 PM ",
+      "Departure_Time": "08:50 PM",
+      "Boarding_At": "Varadhi",
+      "Landmark": "Bus Stop Near Auto Stand, Kanakadurga Varadhi",
+      "Operator_Name": "Fresh Bus",
+      "reportingTimeTwfFormat": "20:50",
+      "departureTimeTwfFormat": "20:50",
+      "sourceid": "3",
+      "destinationid": "7",
+      "tripType": "O",
+      "insurance": "0.00",
+      "serviceTaxAmt": "53.75",
+      "serviceCharge": "0.00",
+      "operatorDiscount": "0.00",
+      "otherDiscount": "0",
+      "history_id": "21448476",
+      "api": "2291",
+      "passengerdetails": [],
+      "baseFare": "1075.00",
+      "addonType": "",
+      "isRSAenabled": "1",
+      "abhicash": "0.00",
+      "amountPaidSubText": "",
+      "busPartnerDiscount": "107.50",
+      "couponDiscount": "0.00",
+      "abhibusDiscount": "107.50",
+      "rating": "0",
+      "droppingPlace": "Hayathnagar",
+      "droppingTime": "23:50",
+      "droppingDateTime": "2026-10-07 23:50",
+      "boardingDateTime": "2026-10-07 17:30",
+      "operatorId": "120849",
+      "rescheduleEnabled": "0",
+      "serviceId": "51",
+      "fareDetails": [
+        {
+          "title": "Bus partner discount ",
+          "amount": "107.50",
+          "type": "1",
+          "fareType": "3"
+        },
+        {
+          "title": "AbhiBus Exclusive Discount",
+          "amount": "107.50",
+          "type": "1",
+          "fareType": "3"
+        },
+        {
+          "title": "Total Fare (inclusive)",
+          "amount": "1128.75",
+          "type": "0",
+          "fareType": "1",
+          "isInclusiveFare": "1"
+        },
+        {
+          "title": "Base Fare",
+          "amount": "1075.00",
+          "type": "0",
+          "fareType": "2"
+        },
+        {
+          "title": "Bus Partner GST",
+          "amount": "53.75",
+          "type": "0",
+          "fareType": "2",
+          "ref": "gst"
+        },
+        {
+          "title": "Service Charge",
+          "amount": "0.00",
+          "type": "0",
+          "fareType": "2",
+          "ref": "service_charge"
+        },
+        {
+          "title": "AbhiCash",
+          "amount": "0.00",
+          "type": "1",
+          "fareType": "4",
+          "ref": "abhicash"
+        },
+        {
+          "title": "Travel Insurance",
+          "amount": "0.00",
+          "type": "0",
+          "fareType": "1",
+          "ref": "insurance"
+        }
+      ],
+      "feedbackToken": "REDACTED",
+      "busPartnerDetails": [
+        {
+          "title": "Bus partner helpline",
+          "value": "9676266294"
+        }
+      ],
+      "ixigopsdk": "1",
+      "women_safety_shield": {
+        "enabled": true,
+        "header": {
+          "title": "Women Safety Shield",
+          "subtitle": "{}+ Safety features active for this trip!"
+        },
+        "safety_actions": {
+          "section_title": "Safety Actions",
+          "items": [
+            {
+              "id": "safe_pickup_drop",
+              "title": "Safe Pickup & Drop",
+              "subtitle": "Women verified safe pickup & drop points"
+            },
+            {
+              "id": "monitoring_24x7",
+              "title": "24/7 Monitoring",
+              "subtitle": "Call or Text for Emergency"
+            },
+            {
+              "id": "emergency_contacts",
+              "title": "Emergency Contacts",
+              "subtitleWithCount": "{} emergency contacts added",
+              "subtitleWithOutCount": "emergency contacts added",
+              "contactsCount": 4
+            },
+            {
+              "id": "share_live_tracking",
+              "title": "Share Live Tracking",
+              "subtitle": "Share tracking with your loved ones!"
+            }
+          ]
+        },
+        "active_features": {
+          "section_title": "Active Features",
+          "items": [
+            {
+              "id": "abhi_assured",
+              "title": "AbhiAssured",
+              "subtitle": "Top rated · Superior · Reliable buses"
+            },
+            {
+              "id": "insurance",
+              "title": "Insurance",
+              "subtitle": "₹8 lakh cover activated for this trip"
+            },
+            {
+              "id": "bus_route_safety",
+              "title": "Bus & route Safety",
+              "subtitle": ""
+            },
+            {
+              "id": "women_zone_seats",
+              "title": "Women Zone seats",
+              "subtitle": "Seats for women, around women"
+            }
+          ]
+        }
+      },
+      "isWomenBooking": "1",
+      "isWomenInsurance": "0",
+      "trackBusURL": "https://track.abhibus.com/?service=MjI5MV83XzUx_20261007",
+      "boardingLatLong": "17.44601847334092, 78.37607690613669",
+      "droppingLatLong": "17.32745, 78.601607",
+      "DownloadTicket": "https://demo.abhibus.com/downloadtkt?tkno=DZ5675184138&phonenum=900000&sig=50bfebcbb345fa14e81efd4a547cf1eccca7ee09d9f79dc07df885b92408a2ba",
+      "DownloadTicketNew": "https://demo.abhibus.com/downloadtkt?tkno=DZ5675184138&phonenum=900000&sig=50bfebcbb345fa14e81efd4a547cf1eccca7ee09d9f79dc07df885b92408a2ba",
+      "shareWhatsappText": "AbhiBus.com Mobile Ticket:\n--\nFrom: Hyderabad\nTo: Bangalore\nBus Partner: Fresh Bus\nService No: HYD-BNG-AC-SL-2200\n--\nAbhiBus Booking ID: DZ5675184138\nBus Partner PNR: FRE685685 \n--\nJourney Date: 08-Oct-2026\nDeparture Time: 20:50\nSeats: 11U\nBus Type: AC Sleeper\n--Boarding Point: KPHB, Pillar No: A738 Beside PNR Empire7075511729\n\nBus Partner Helpline No:-- 9676266294\n--\nDropping Point: HSR Layout\n--\nThis message is a valid mTicket.\nPlease report 15 minutes before departure time.\n\nAbhiBus Customer Care: 040-61656789\n\nChat with us: https://m368j.app.goo.gl/chat",
+      "cancelpolicy": [
+        {
+          "cc": "Rs. 914",
+          "rp": "85%",
+          "tl": "Rs 914 /- @ 85% refund",
+          "con": "Before 07-Oct 19:50"
+        },
+        {
+          "cc": "Rs. 860",
+          "rp": "80%",
+          "tl": "Rs 860 /- @ 80% refund",
+          "con": "Between 07-Oct 19:50 & 08-Oct 07:50"
+        },
+        {
+          "cc": "Rs. 538",
+          "rp": "50%",
+          "tl": "Rs 538 /- @ 50% refund",
+          "con": "Between 08-Oct 07:50 & 08-Oct 13:50"
+        },
+        {
+          "cc": "Rs. 0",
+          "rp": "0%",
+          "tl": "Rs 0 /- @ 0% refund",
+          "con": "After 08-Oct 13:50"
+        }
+      ],
+      "isTopRatedOrMostTrustBus": ""
+    }
+  ],
+  "contactNumber": "+91-40-61656789",
+  "insuranceSubText": "",
+  "fares": {
+    "otherDiscount": "0.00",
+    "couponDiscount": "0.00",
+    "rewardDiscount": "0.00",
+    "serviceTaxAmt": "53.75",
+    "serviceCharge": "0.00",
+    "operatorDiscount": "0.00",
+    "baseFare": "1075.00",
+    "insurance": "0.00",
+    "Fare": "913.75",
+    "abhicash": "0.00",
+    "nonPromo": "0.00",
+    "promo": "0.00"
+  },
+  "fareDetails": [
+    {
+      "title": "Total Fare (inclusive)",
+      "amount": "1128.75",
+      "type": "0",
+      "fareType": "1",
+      "isInclusiveFare": "1"
+    },
+    {
+      "title": "Base Fare",
+      "amount": "1075.00",
+      "type": "0",
+      "fareType": "2"
+    },
+    {
+      "title": "Bus Partner GST",
+      "amount": "53.75",
+      "type": "0",
+      "fareType": "2"
+    },
+    {
+      "title": "Service Charge",
+      "amount": "0.00",
+      "type": "0",
+      "fareType": "2"
+    },
+    {
+      "title": "Discount",
+      "amount": "0.00",
+      "type": "1",
+      "fareType": "3",
+      "ref": "discount"
+    },
+    {
+      "title": "Bus Partner Discount",
+      "amount": "107.50",
+      "type": "1",
+      "fareType": "3"
+    },
+    {
+      "title": "AbhiBus Exclusive Discount",
+      "amount": "107.50",
+      "type": "1",
+      "fareType": "3"
+    },
+    {
+      "title": "Travel Insurance",
+      "amount": "0.00",
+      "type": "0",
+      "fareType": "1"
+    }
+  ],
+  "farePaymentSources": [
+    {
+      "title": "Original Mode of payment (Net paid)",
+      "amount": "913.75",
+      "type": "0",
+      "fareType": "4",
+      "pgMode": "Razorpay"
+    }
+  ],
+  "isFreeCancelCheck": "0",
+  "isAssuredCheck": "0",
+  "isTravelGuaranteeCheck": "0",
+  "abhiCreditsMessage": "21.50 AbhiCredits will be unlocked once you complete this journey.",
+  "isServiceTaxReq": "1",
+  "isRtc": "0",
+  "thanksInfo": {
+    "title": "Thanks for choosing {img} ",
+    "subtilte": "we look forward to serving you again :)",
+    "ctaBtn": "Book Return",
+    "img": "https://static.abhibus.com/img/edge/abhibus-icon.png",
+    "savedtxt": "Saved on this journey"
+  },
+  "unlockOffersDetails": {
+    "offerTitle": "Return Trip Offer Unlocked",
+    "offerSubTitle": "Get 10% off on Return Journey with Fresh Bus ",
+    "offerExpTxt": "Offer expires on 23 Oct 2026",
+    "popupTimeTime": "10000",
+    "returnTripExpDate": "23 Oct 2026",
+    "returnTripNoOfDays": "15"
+  },
+  "freeTicketOffer": {
+    "titleOperatorName": "Find [operator name] buses & proceed to book",
+    "titleOfferDetail": "Unlock eligibility for Free Ticket after booking",
+    "titleRemainigCount": "Complete ([Remaining Trip Count]) trips with [Operator name]",
+    "titleAmountWorth": "Enjoy your Free ticket! worth up to [amount worth]"
+  }
+}

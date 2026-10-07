@@ -47,8 +47,8 @@ export const isReactionEmoji = (e: string) =>
 
 // ------------------------------------------------------------- identity --
 /**
- * Passengers appear as a first name + avatar they choose when joining (never
- * the booking name). Default avatar = their initial. 38 avatars: mostly animals
+ * Passengers appear under a random trip name + persona avatar assigned on join
+ * (shared/personas.ts); these emoji avatars remain for older sessions. Default avatar = their initial. 38 avatars: mostly animals
  * and playful characters, a few people across ages.
  */
 export const AVATAR_GROUPS = [
@@ -70,13 +70,20 @@ export interface Member {
   online: boolean;
   guest: boolean;              // joined via QR (ticket not verified on AbhiBus)
   invitedBy?: string | null;   // guests: display name of the passenger whose QR they scanned
+  onBoard?: boolean;
 }
 
 export const REPORT_REASONS = ['HARASSMENT', 'ABUSE', 'CONTACT_SHARING', 'SPAM', 'OTHER'] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
 
 // ---------------------------------------------------------------- payloads --
-export interface TextPayload { text: string }
+export interface TextPayload {
+  text: string;
+  mentions?: string[];
+  /** 'LOCATION' = asking riders on board for the bus's live location; `waitingAt` = the asker's boarding point while they haven't boarded. */
+  ask?: 'LOCATION';
+  waitingAt?: string | null;
+}
 export interface StickerPayload { stickerId: StickerId }
 export interface BusLocationPayload {
   lat: number;
@@ -151,7 +158,7 @@ export interface QrJoinCheck { busKm: number | null; providerKm: number | null; 
  * computed by the server when it builds the message and pushed via S2C.MSG_UPDATE.
  */
 export const GAME_MOVE_PREFIX = 'g:';
-export type GameKind = 'QUIZ' | 'EMOJI' | 'TTT';
+export type GameKind = 'QUIZ' | 'EMOJI' | 'TTT' | 'SNL' | 'RPS';
 
 export interface QuizGame {
   kind: 'QUIZ';
@@ -178,7 +185,62 @@ export interface TttGame {
   challenger: string;          // plays X, moves first
   expiresAt: string;           // open challenge expires if nobody accepts
 }
-export type GamePayload = QuizGame | EmojiGame | TttGame;
+/** Snakes & Ladders: 2–4 players. Moves: `g:join`, `g:start` (host), `g:r<i>d<die>` (roll i, die rolled by the server). */
+export interface SnlGame {
+  kind: 'SNL';
+  challenger: string;          // host: plays first, starts the game
+  expiresAt: string;           // joining closes (if not started by then, the game lapses)
+}
+/** Rock-paper-scissors: the challenger's pick stays on the server until someone answers (`g:p<pick>`). */
+export interface RpsGame {
+  kind: 'RPS';
+  challenger: string;
+  expiresAt: string;
+  opponent: string | null;
+  challengerPick: number | null; // revealed once the opponent has picked
+  opponentPick: number | null;
+}
+export type GamePayload = QuizGame | EmojiGame | TttGame | SnlGame | RpsGame;
+
+// ------------------------------------------------------ snakes & ladders --
+export const SNL_MAX_PLAYERS = 4;
+export const SNL_GOAL = 100;
+/** Square → where you end up. Ladders go up, snakes go down. */
+export const SNL_JUMPS: Record<number, number> = {
+  4: 14, 9: 31, 21: 42, 28: 84, 51: 67, 72: 91, 80: 99,          // ladders
+  17: 7, 54: 34, 62: 19, 64: 60, 87: 24, 93: 73, 95: 75, 98: 79, // snakes
+};
+export type SnlRoll = { seat: string; die: number; from: number; to: number; via: 'ladder' | 'snake' | null };
+/** Derive the whole board from the move rows (shared by client + server, so they always agree). */
+export function snlState(g: SnlGame, reactions: Record<string, string[]>) {
+  const players = [g.challenger, ...(reactions[`${GAME_MOVE_PREFIX}join`] ?? []).filter((x) => x !== g.challenger)].slice(0, SNL_MAX_PLAYERS);
+  const started = (reactions[`${GAME_MOVE_PREFIX}start`] ?? []).length > 0;
+  const rolls = Object.entries(reactions).flatMap(([k, seats]) => {
+    const m = k.match(/^g:r(\d+)d([1-6])$/);
+    return m && seats[0] ? [{ i: Number(m[1]), die: Number(m[2]), seat: seats[0] }] : [];
+  }).sort((a, b) => a.i - b.i);
+  const positions: Record<string, number> = Object.fromEntries(players.map((x) => [x, 0]));
+  let winner: string | null = null;
+  let last: SnlRoll | null = null;
+  for (const r of rolls) {
+    if (winner || !(r.seat in positions)) break;
+    const from = positions[r.seat];
+    const landed = from + r.die > SNL_GOAL ? from : from + r.die; // overshoot: stay put
+    const jump = SNL_JUMPS[landed];
+    const to = jump ?? landed;
+    positions[r.seat] = to;
+    last = { seat: r.seat, die: r.die, from, to, via: jump == null ? null : jump > landed ? 'ladder' : 'snake' };
+    if (to === SNL_GOAL) winner = r.seat;
+  }
+  const turn = started && !winner && players.length >= 2 ? players[rolls.length % players.length] : null;
+  return { players, started, positions, rollCount: rolls.length, last, winner, turn };
+}
+
+// ---------------------------------------------------- rock paper scissors --
+export const RPS_PICKS = ['✊', '✋', '✌️'] as const;
+export const RPS_NAMES = ['Rock', 'Paper', 'Scissors'] as const;
+/** 1 = a beats b, -1 = b beats a, 0 = draw. */
+export const rpsBeats = (a: number, b: number) => (a === b ? 0 : (a - b + 3) % 3 === 1 ? 1 : -1);
 
 export const TTT_LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]] as const;
 /** Derive tic-tac-toe state from the move rows (shared by client + server, so they always agree). */
@@ -230,6 +292,7 @@ export interface ChatMessage {
   clientMsgId?: string | null;
   senderAvatar?: string | null; // AVATARS key of the sender (null = initial of senderHandle)
   senderGuest?: boolean;       // sender joined via QR
+  senderOnBoard?: boolean;     // sender's boarding time has passed (or a QR guest): shown as "On board"
   seenBy: string[];            // seat handles' seat codes, e.g. ["4W","18L"]
   reactions: Record<string, string[]>; // emoji -> seats
 }
@@ -256,6 +319,8 @@ export interface JourneyInfo {
   status: 'SCHEDULED' | 'IN_TRANSIT' | 'ARRIVED' | 'PURGED';
   purgeAt: string | null;
   totalSeatsBooked: number;
+  /** Bus operator's helpline (from the booking), offered in the SOS sheet. */
+  operatorHelpline: string | null;
 }
 
 export interface ProgressState {
@@ -265,6 +330,8 @@ export interface ProgressState {
   nextStop: { name: string; distanceKm: number } | null;
   etaToDestination: string | null;
   updatedAt: string;
+  /** GPS = a fresh fix from the bus; SCHEDULE = estimated from the timetable. */
+  source?: 'GPS' | 'SCHEDULE';
 }
 
 export interface EtaGameState {
@@ -317,6 +384,20 @@ export interface Me {
   gender: Gender;              // own gender only; server re-checks on every women-room join
 }
 
+/** Trip panel (tap the route in the header). Counts only: never names or seats. */
+export interface TripInfo {
+  travellers: { booked: number; joined: number; women: number; guests: number };
+  bus: {
+    placeLabel: string; progress: number; speedKmph: number | null; lat: number; lng: number;
+    nextStop: { name: string; distanceKm: number } | null; eta: string | null;
+    /** GPS = a fresh fix from the bus; SCHEDULE = estimated from the timetable (no fix in the last 10 min). */
+    source: 'GPS' | 'SCHEDULE'; fixAt: string | null;
+  } | null;
+  stops: { name: string; kind: string; at: string | null; passed: boolean; boarding: number; dropping: number; mine: 'BOARD' | 'DROP' | null }[];
+  schedule: { departs: string; arrives: string };
+  myStops: { boarding: string | null; boardingAt: string | null; dropping: string | null; droppingAt: string | null } | null;
+}
+
 export interface JoinResponse {
   token: string;
   me: Me;
@@ -354,6 +435,7 @@ export const C2S = {
   PERSON_REPORT: 'person:report',    // { seat, roomType, reason } -> Ack<null>. Report someone from the people list (counts toward removal)
   SEAT_BLOCK: 'seat:block',          // { seat, blocked } -> Ack<string[]>
   GAME_GUESS: 'game:guess',          // { gameId, guessAt } -> Ack<EtaGameState>
+  TRIP_INFO: 'trip:info',            // {} -> Ack<TripInfo>. Trip panel: traveller counts, stops, bus position
   TYPING: 'typing',                  // { roomType, isTyping } (fire & forget)
 } as const;
 

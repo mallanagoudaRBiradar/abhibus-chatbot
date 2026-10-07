@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons } from './icons';
+import * as Haptics from '../services/haptics';
 import { Txt } from './Txt';
 import { saveThemePref } from '../services/prefs';
 import { palette, radius, themed, useThemePref, type ThemePref } from '../theme/tokens';

@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { api } from '../services/api';
 import { PollCard, SurveyCard } from './PlatformCards';
 import { useChat } from '../store/chatStore';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from './icons';
 import { Txt } from './Txt';
 import { clock } from '../utils/format';
 import { palette, radius, themed } from '../theme/tokens';

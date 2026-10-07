@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Modal, Pressable, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import EmojiPicker, { type EmojiType } from 'rn-emoji-keyboard';
+import { Ionicons } from './icons';
+import * as Haptics from '../services/haptics';
+import EmojiPicker, { type EmojiType } from './EmojiPicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Txt } from './Txt';
 import { toast } from './Toast';

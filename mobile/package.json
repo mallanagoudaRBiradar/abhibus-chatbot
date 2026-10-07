@@ -9,7 +9,9 @@
     "ios": "expo run:ios",
     "prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit",
-    "doctor": "npx expo-doctor"
+    "doctor": "npx expo-doctor",
+    "icons:subset": "node scripts/subset-icons.mjs",
+    "build:web": "node scripts/subset-icons.mjs --check && expo export --platform web --output-dir dist"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
@@ -48,6 +50,7 @@
     "@babel/core": "^7.26.0",
     "@types/react": "~19.2.0",
     "babel-preset-expo": "~57.0.13",
+    "subset-font": "^2.9.0",
     "typescript": "~5.9.2"
   }
 }

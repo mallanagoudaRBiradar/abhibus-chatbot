@@ -1,9 +1,11 @@
+import type { GameMoveInput } from '../components/GameCard';
 import { uuid } from '../utils/uuid';
 import { io, type Socket } from 'socket.io-client';
 import { API_URL } from './api';
 import { useChat, type UiMessage } from '../store/chatStore';
 import { checkMessage, BLOCK_REASON_COPY } from '../shared/moderation';
-import {
+import { host } from './host';
+import { type TripInfo,
   C2S, S2C,
   type Ack, type ChatMessage, type EtaGameState, type PresenceState, type ProgressState, type ReactionEmoji,
   type ReportReason, type RoomSnapshot, type RoomType, type StickerId, type PinnedState,
@@ -43,6 +45,8 @@ class ChatSocketService {
       path: '/ws',
       transports: ['websocket'],
       auth: { token: session.token },
+      // Lets the load balancer keep every phone on one bus on the same server.
+      query: { jid: session.journey.journeyId },
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 8000,
@@ -57,6 +61,15 @@ class ChatSocketService {
     });
     s.on('disconnect', () => store().setConnection('offline'));
     s.on('connect_error', (err) => {
+      if (err.message === 'UNAUTHORIZED' && host.embedded) {
+        // Inside the app: ask it for a fresh session (it calls chat-sessions again).
+        // A new session remounts the chat with a new socket; no answer = chat over.
+        this.disconnect();
+        store().setConnection('offline');
+        host.post('sessionExpired');
+        void host.next('session', 10_000).then((fresh) => { if (!fresh) store().setClosed('UNAUTHORIZED'); });
+        return;
+      }
       if (err.message === 'UNAUTHORIZED' || err.message === 'JOURNEY_CLOSED' || err.message === 'REMOVED') {
         store().setClosed(err.message === 'JOURNEY_CLOSED' ? 'ENDED' : err.message === 'REMOVED' ? 'REMOVED' : 'UNAUTHORIZED');
         this.disconnect();
@@ -85,6 +98,11 @@ class ChatSocketService {
     s.on(S2C.REMOVED, ({ reason }: { reason?: string }) => { store().setClosed('REMOVED', reason ?? null); this.disconnect(); });
     s.on(S2C.JOURNEY_ENDING, ({ purgeAt }: { purgeAt: string }) => store().setPurgeAt(purgeAt));
     s.on(S2C.JOURNEY_CLOSED, () => { store().setClosed('ENDED'); this.disconnect(); });
+  }
+
+  /** App back in the foreground (WebViews pause timers in the background): reconnect now instead of waiting for backoff. */
+  wake() {
+    if (this.socket && !this.socket.connected) this.socket.connect();
   }
 
   disconnect() {
@@ -117,6 +135,9 @@ class ChatSocketService {
     }));
   }
 
+  /** Trip panel data (traveller counts, stops, bus position) from the server's DB. */
+  tripInfo() { return this.request<TripInfo>(C2S.TRIP_INFO, {}); }
+
   async loadOlder(roomType: RoomType) {
     const room = useChat.getState().rooms[roomType];
     const oldest = room.messages.find((m) => m.status === 'sent');
@@ -135,10 +156,10 @@ class ChatSocketService {
     };
   }
 
-  sendText(roomType: RoomType, raw: string): SendResult {
+  sendText(roomType: RoomType, raw: string, opts: { ask?: 'LOCATION' } = {}): SendResult {
     const verdict = checkMessage(raw);
     if (!verdict.ok) return { ok: false, reason: BLOCK_REASON_COPY[verdict.reason] };
-    const msg = this.makePending(roomType, 'TEXT', { text: verdict.text });
+    const msg = this.makePending(roomType, 'TEXT', opts.ask ? { text: verdict.text, ask: opts.ask } : { text: verdict.text });
     useChat.getState().addPending(msg);
     void this.deliver(msg);
     return { ok: true };
@@ -209,19 +230,20 @@ class ChatSocketService {
   createQrInvite(coords: { lat: number; lng: number }) { return this.request<QrInvite>(C2S.QR_CREATE, { coords }); }
 
   /** Start a mini game; the server picks the question / puzzle. Shows a placeholder card until it lands. */
-  startGame(roomType: RoomType, kind: GameKind) {
-    const msg = this.makePending(roomType, 'GAME', { kind, pending: true });
+  startGame(roomType: RoomType, kind: GameKind, opts: { pick?: number } = {}) {
+    const msg = this.makePending(roomType, 'GAME', { kind, pending: true, ...opts });
     useChat.getState().addPending(msg);
     void this.deliver(msg);
   }
 
   /** Game move with an optimistic local echo; reverts (and returns the reason) if the server refuses. */
-  async gameMove(m: UiMessage, move: { type: 'answer'; option: number } | { type: 'join' } | { type: 'cell'; cell: number }) {
+  async gameMove(m: UiMessage, move: GameMoveInput) {
     const st = useChat.getState();
     const seat = st.session!.me.seat;
     const before = m.reactions;
-    const key = `${GAME_MOVE_PREFIX}${move.type === 'answer' ? `a${move.option}` : move.type === 'join' ? 'join' : `m${move.cell}`}`;
-    st.applyReactions(m.roomType, m.id, { ...before, [key]: [...(before[key] ?? []), seat] });
+    // Dice are rolled on the server, so a roll has no optimistic echo.
+    const echo = move.type === 'answer' ? `a${move.option}` : move.type === 'cell' ? `m${move.cell}` : move.type === 'pick' ? `p${move.pick}` : move.type === 'roll' ? null : move.type;
+    if (echo) st.applyReactions(m.roomType, m.id, { ...before, [`${GAME_MOVE_PREFIX}${echo}`]: [...(before[`${GAME_MOVE_PREFIX}${echo}`] ?? []), seat] });
     const ack = await this.request<null>(C2S.GAME_MOVE, { messageId: m.id, move });
     if (!ack.ok) useChat.getState().applyReactions(m.roomType, m.id, before);
     return ack;
@@ -246,7 +268,7 @@ class ChatSocketService {
     const base = { roomType: msg.roomType, clientMsgId: msg.clientMsgId };
     const ack =
       msg.contentType === 'BUS_LOCATION' ? await this.request<ChatMessage>(C2S.LOCATION_SHARE, msg.payload?.coords ? { ...base, coords: msg.payload.coords } : base)
-      : msg.contentType === 'GAME' ? await this.request<ChatMessage>(C2S.GAME_START, { ...base, kind: msg.payload.kind })
+      : msg.contentType === 'GAME' ? await this.request<ChatMessage>(C2S.GAME_START, { ...base, kind: msg.payload.kind, ...(msg.payload.pick != null ? { pick: msg.payload.pick } : {}) })
       : msg.contentType === 'POLL' ? await this.request<ChatMessage>(C2S.POLL_CREATE, { ...base, ...msg.payload })
       : msg.contentType === 'LANDMARK' ? await this.request<ChatMessage>(C2S.LANDMARK_SHARE, { ...base, landmarkId: msg.payload.landmarkId })
       : await this.request<ChatMessage>(C2S.MSG_SEND, { ...base, contentType: msg.contentType, payload: msg.payload });

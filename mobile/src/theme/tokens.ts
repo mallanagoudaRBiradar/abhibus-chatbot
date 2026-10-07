@@ -1,23 +1,25 @@
 /**
  * ============================================================================
- *  "Night Highway" design tokens — dark + light
+ *  Trip Chat design tokens — dark + light
  * ============================================================================
  *  Principles
- *  1. Built for 2 AM: no large bright fills. Own bubbles are tinted, not solid,
- *     so a phone lit in a dark sleeper berth doesn't glare at neighbours.
- *  2. The accent (cyan at night, deep teal by day) means LIVE. It's reserved for
- *     real-time signals: the bus marker, online dots, "seen" ticks, send.
- *  3. AbhiBus red means SAFETY or DESTRUCTIVE. SOS, report, block, exit.
- *  4. The women-only room swaps the accent to rose across every surface, so
+ *  1. Built for 2 AM: near-black page, dark-grey bubbles, no large bright fills
+ *     except your own messages (AbhiBus red), so you can find them at a glance.
+ *  2. AbhiBus red is the accent: own bubbles, primary buttons, active tab,
+ *     quick replies. Green means LIVE / on board, amber means late.
+ *  3. Safety actions (SOS, report, block, exit) use the same red, always with an icon.
+ *  4. Women Zone swaps the accent to rose across every surface, so
  *     nobody ever posts in the wrong room by mistake.
  *  5. Identity is a seat, never a face. Seats render as berth tags.
  *
  *  Theming: `palette`, `roomTheme` and `themed()` styles resolve against the
- *  active mode at read time. App.tsx sets the mode and remounts the tree when
- *  it changes, so components keep reading `palette.x` exactly as before.
+ *  active mode at read time. App.tsx sets the mode and re-renders the tree when
+ *  it changes (ThemeModeContext reaches memoized rows), so components keep
+ *  reading `palette.x` exactly as before.
  *  Key names are historical: `navy` = page background, `navyDeep` = chrome.
  * ============================================================================
  */
+import { createContext, useContext } from 'react';
 import { StyleSheet } from 'react-native';
 import { create } from 'zustand';
 import type { RoomType } from '../shared/protocol';
@@ -26,58 +28,62 @@ export type ThemeMode = 'dark' | 'light';
 export type ThemePref = 'system' | ThemeMode;
 
 const dark = {
-  navy: '#0B132B',
-  navyDeep: '#070D20',
-  outer: '#04070F',
-  bgClear: 'rgba(11,19,43,0)',
-  surface: '#111C3D',
-  surfaceRaised: '#18264F',
-  surfaceSunk: '#0A1028',
-  hairline: 'rgba(151,170,230,0.12)',
-  hairlineStrong: 'rgba(151,170,230,0.22)',
-  text: '#EEF2FF',
-  textSecondary: '#A4AFD3',
-  textTertiary: '#6A7499',
-  placeholder: 'rgba(106,116,153,0.45)',
-  cyan: '#00F5D4',
-  cyanSoft: 'rgba(0,245,212,0.10)',
-  cyanBorder: 'rgba(0,245,212,0.24)',
-  red: '#E63946',
-  redSoft: 'rgba(230,57,70,0.14)',
-  redBorder: 'rgba(230,57,70,0.42)',
+  navy: '#0E0E11',
+  navyDeep: '#0A0A0C',
+  outer: '#050506',
+  bgClear: 'rgba(14,14,17,0)',
+  surface: '#1E1E23',
+  surfaceRaised: '#2A2A30',
+  surfaceSunk: '#16161A',
+  hairline: 'rgba(255,255,255,0.07)',
+  hairlineStrong: 'rgba(255,255,255,0.14)',
+  text: '#F5F5F7',
+  textSecondary: '#A7A7B0',
+  textTertiary: '#6F6F79',
+  placeholder: 'rgba(111,111,121,0.5)',
+  // Key name is historical: `cyan` is THE accent, now AbhiBus red.
+  cyan: '#E5383B',
+  cyanSoft: 'rgba(229,56,59,0.12)',
+  cyanBorder: 'rgba(229,56,59,0.45)',
+  onCyan: '#FFFFFF',
+  red: '#E5383B',
+  redSoft: 'rgba(229,56,59,0.14)',
+  redBorder: 'rgba(229,56,59,0.45)',
   sosHold: '#8E1D27',
-  amber: '#FFC15E',
-  amberSoft: 'rgba(255,193,94,0.12)',
-  amberBorder: 'rgba(255,193,94,0.30)',
-  rose: '#FF8FC8',
-  roseSoft: 'rgba(255,143,200,0.12)',
-  roseBorder: 'rgba(255,143,200,0.28)',
-  green: '#3DDC97',
-  greenSoft: 'rgba(61,220,151,0.12)',
+  amber: '#F5A524',
+  amberSoft: 'rgba(245,165,36,0.12)',
+  amberBorder: 'rgba(245,165,36,0.30)',
+  rose: '#FF6FAE',
+  roseSoft: 'rgba(255,111,174,0.12)',
+  roseBorder: 'rgba(255,111,174,0.30)',
+  green: '#2FCB7A',
+  greenSoft: 'rgba(47,203,122,0.14)',
+  purple: '#7B5CFA',
   track: 'rgba(255,255,255,0.05)',
-  dash: 'rgba(164,175,211,0.28)',
+  dash: 'rgba(255,255,255,0.18)',
   pressTint: 'rgba(255,255,255,0.06)',
-  backdrop: 'rgba(3,6,18,0.6)',
+  backdrop: 'rgba(0,0,0,0.6)',
   shadow: '#000000',
 };
 
 const light: typeof dark = {
-  navy: '#F2F4F9',
+  navy: '#F4F4F6',
   navyDeep: '#FFFFFF',
-  outer: '#DDE2EC',
-  bgClear: 'rgba(242,244,249,0)',
+  outer: '#E2E2E6',
+  bgClear: 'rgba(244,244,246,0)',
   surface: '#FFFFFF',
-  surfaceRaised: '#E8ECF5',
-  surfaceSunk: '#F7F8FC',
-  hairline: 'rgba(22,34,72,0.10)',
-  hairlineStrong: 'rgba(22,34,72,0.18)',
-  text: '#0E1530',
-  textSecondary: '#4A5578',
-  textTertiary: '#7C86A5',
-  placeholder: 'rgba(124,134,165,0.6)',
-  cyan: '#0A8C7B',
-  cyanSoft: 'rgba(10,140,123,0.10)',
-  cyanBorder: 'rgba(10,140,123,0.30)',
+  surfaceRaised: '#ECECF0',
+  surfaceSunk: '#F8F8FA',
+  hairline: 'rgba(20,20,30,0.08)',
+  hairlineStrong: 'rgba(20,20,30,0.16)',
+  text: '#141418',
+  textSecondary: '#55555F',
+  textTertiary: '#8A8A94',
+  placeholder: 'rgba(138,138,148,0.6)',
+  cyan: '#D62839',
+  cyanSoft: 'rgba(214,40,57,0.08)',
+  cyanBorder: 'rgba(214,40,57,0.40)',
+  onCyan: '#FFFFFF',
   red: '#D62839',
   redSoft: 'rgba(214,40,57,0.08)',
   redBorder: 'rgba(214,40,57,0.40)',
@@ -90,25 +96,27 @@ const light: typeof dark = {
   roseBorder: 'rgba(194,51,122,0.28)',
   green: '#1E9E6A',
   greenSoft: 'rgba(30,158,106,0.12)',
-  track: 'rgba(22,34,72,0.07)',
-  dash: 'rgba(22,34,72,0.20)',
-  pressTint: 'rgba(22,34,72,0.05)',
-  backdrop: 'rgba(10,16,40,0.35)',
-  shadow: '#1A2550',
+  purple: '#6A4BEA',
+  track: 'rgba(20,20,30,0.07)',
+  dash: 'rgba(20,20,30,0.20)',
+  pressTint: 'rgba(20,20,30,0.05)',
+  backdrop: 'rgba(10,10,20,0.35)',
+  shadow: '#1A1A24',
 };
 
 export type Palette = typeof dark;
 const palettes: Record<ThemeMode, Palette> = { dark, light };
 
-type RoomStyle = { accent: string; tint: string; border: string; onAccent: string; name: string; icon: 'people' | 'shield-checkmark' };
+/** `mine` = solid fill of my own bubbles, `onMine` = text on it. */
+type RoomStyle = { accent: string; tint: string; border: string; onAccent: string; mine: string; onMine: string; name: string; icon: 'people' | 'shield-checkmark' };
 const roomThemes: Record<ThemeMode, Record<RoomType, RoomStyle>> = {
   dark: {
-    MAIN_COMMON: { accent: dark.cyan, tint: 'rgba(0,245,212,0.10)', border: 'rgba(0,245,212,0.26)', onAccent: '#02261F', name: 'Bus lounge', icon: 'people' },
-    WOMEN_ONLY: { accent: dark.rose, tint: 'rgba(255,143,200,0.11)', border: 'rgba(255,143,200,0.30)', onAccent: '#3A0B24', name: 'Women only', icon: 'shield-checkmark' },
+    MAIN_COMMON: { accent: dark.cyan, tint: 'rgba(229,56,59,0.12)', border: 'rgba(229,56,59,0.40)', onAccent: '#FFFFFF', mine: '#D7333A', onMine: '#FFFFFF', name: 'Everyone', icon: 'people' },
+    WOMEN_ONLY: { accent: dark.rose, tint: 'rgba(255,111,174,0.12)', border: 'rgba(255,111,174,0.32)', onAccent: '#2E0718', mine: '#B83A78', onMine: '#FFFFFF', name: 'Women Zone', icon: 'shield-checkmark' },
   },
   light: {
-    MAIN_COMMON: { accent: light.cyan, tint: 'rgba(10,140,123,0.10)', border: 'rgba(10,140,123,0.26)', onAccent: '#FFFFFF', name: 'Bus lounge', icon: 'people' },
-    WOMEN_ONLY: { accent: light.rose, tint: 'rgba(194,51,122,0.08)', border: 'rgba(194,51,122,0.26)', onAccent: '#FFFFFF', name: 'Women only', icon: 'shield-checkmark' },
+    MAIN_COMMON: { accent: light.cyan, tint: 'rgba(214,40,57,0.08)', border: 'rgba(214,40,57,0.30)', onAccent: '#FFFFFF', mine: '#D62839', onMine: '#FFFFFF', name: 'Everyone', icon: 'people' },
+    WOMEN_ONLY: { accent: light.rose, tint: 'rgba(194,51,122,0.08)', border: 'rgba(194,51,122,0.26)', onAccent: '#FFFFFF', mine: '#C2337A', onMine: '#FFFFFF', name: 'Women Zone', icon: 'shield-checkmark' },
   },
 };
 
@@ -117,6 +125,13 @@ let activeMode: ThemeMode = 'dark';
 export const currentMode = () => activeMode;
 /** Called by App.tsx during render, before any themed child reads a colour. */
 export function setActiveMode(m: ThemeMode) { activeMode = m; }
+/**
+ * The active mode as React context. App.tsx re-renders the tree on a Light/Dark
+ * switch (no remount: sheets stay open, scroll and connection are kept). Parts
+ * that skip re-renders (memoized rows, FlatList) read this so they repaint too.
+ */
+export const ThemeModeContext = createContext<ThemeMode>('dark');
+export const useThemeMode = () => useContext(ThemeModeContext);
 
 /** User preference (persisted by App.tsx). */
 export const useThemePref = create<{ pref: ThemePref; setPref: (p: ThemePref) => void }>((set) => ({

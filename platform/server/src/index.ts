@@ -39,7 +39,7 @@ async function main() {
   createRealtime(server);
   startEngine();
   if (config.DEMO_MODE) await startDemo();
-  server.listen(config.PORT, () => logger.info(`🛰️  Trip Rooms platform on :${config.PORT} (demo=${config.DEMO_MODE})`));
+  server.listen(config.PORT, () => logger.info(`🛰️  Trip Rooms platform on :${config.PORT} (db=${config.databaseLabel}, demo=${config.DEMO_MODE})`));
   const shutdown = async () => { await prisma.$disconnect(); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

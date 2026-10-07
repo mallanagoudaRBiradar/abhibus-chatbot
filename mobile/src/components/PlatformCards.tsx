@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons } from './icons';
 import { Txt } from './Txt';
 import { clock } from '../utils/format';
 import { palette, radius, themed } from '../theme/tokens';

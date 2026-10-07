@@ -3,6 +3,7 @@ import { config } from '../config';
 import { logger } from '../lib/logger';
 import { tracker } from '../tracking/gpsProvider';
 import { platformBridge } from '../platform/bridge';
+import { emitPartnerEvent } from '../lib/webhooks';
 
 /**
  * SOS — priority alert to the AbhiBus Safety Desk + the passenger's emergency
@@ -20,12 +21,12 @@ export async function raiseSos(journeyId: string, who: { pnr: string; seat: stri
   const j = await prisma.busJourney.findUniqueOrThrow({ where: { journeyId } });
   const pos = await tracker.getPosition(j).catch(() => null);
   const ev = await prisma.sosEvent.create({
-    data: { journeyId, pnrNumber: who.pnr, seatNumber: who.seat, lat: pos?.lat, lng: pos?.lng, placeLabel: pos ? `${pos.placeLabel} (${pos.highway})` : null },
+    data: { journeyId, pnrNumber: who.pnr, seatNumber: who.seat, lat: pos?.lat, lng: pos?.lng, placeLabel: pos ? (pos.highway ? `${pos.placeLabel} (${pos.highway})` : pos.placeLabel) : null },
   });
 
   const alert = {
     type: 'JOURNEY_SOS', incidentId: ev.id, priority: 'P1', journeyId, busNumber: j.busNumber, operator: j.operatorName,
-    seat: who.seat, pnr: who.pnr, location: pos ? { lat: pos.lat, lng: pos.lng, label: ev.placeLabel, at: pos.recordedAt } : null,
+    seat: who.seat, pnr: who.pnr, operatorHelpline: j.operatorHelpline, location: pos ? { lat: pos.lat, lng: pos.lng, label: ev.placeLabel, at: pos.recordedAt } : null,
     raisedAt: ev.createdAt,
   };
 
@@ -42,9 +43,10 @@ export async function raiseSos(journeyId: string, who: { pnr: string; seat: stri
       logger.error({ incidentId: ev.id }, 'SOS webhook failed after retries');
     })();
   }
+  emitPartnerEvent('sos.raised', alert);
   platformBridge.sos(journeyId, who.seat, pos ? { lat: pos.lat, lng: pos.lng } : null, ev.id); // Trip Rooms Ops inbox
   // TODO(platform): notify emergency contacts saved on the AbhiBus account (SMS/WhatsApp via prod_whatsapp).
   logger.warn({ incidentId: ev.id, journeyId, seat: who.seat }, '🚨 SOS raised');
 
-  return { incidentId: ev.id, placeLabel: ev.placeLabel, supportPhone: config.SUPPORT_PHONE || null, emergencyNumber: '112' };
+  return { incidentId: ev.id, placeLabel: ev.placeLabel, supportPhone: config.SUPPORT_PHONE || null, operatorHelpline: j.operatorHelpline, emergencyNumber: '112' };
 }

@@ -8,10 +8,13 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "db:push": "prisma db push",
-    "seed": "tsx src/demo/reseed.ts"
+    "db:migrate": "prisma migrate deploy",
+    "seed": "tsx src/demo/reseed.ts",
+    "setup:real": "tsx src/setup/realMode.ts"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "cors": "^2.8.5",

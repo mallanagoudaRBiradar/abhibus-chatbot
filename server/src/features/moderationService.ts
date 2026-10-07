@@ -19,44 +19,39 @@ import { S2C, seatKey, type ReportReason, type RoomType } from '../shared/protoc
  */
 /** Demo hook: lets simulated passengers add their reports to a real report. */
 export const reportListeners: ((journeyId: string, roomType: RoomType, reportedSeat: string, messageId: string) => void)[] = [];
-/** journeyId -> seat -> reason. Mirrors seat_mute; every write below updates both. */
-const mutedCache = new Map<string, Map<string, string>>();
 const MUTE_BY_REPORTS = 'AUTO_REPORT_THRESHOLD';
 export const MUTE_BY_STAFF = 'MUTED_BY_ABHIBUS';
 
-async function mutes(journeyId: string) {
-  let m = mutedCache.get(journeyId);
-  if (!m) {
-    m = new Map((await prisma.seatMute.findMany({ where: { journeyId }, select: { seatNumber: true, reason: true } })).map((r) => [r.seatNumber, r.reason]));
-    mutedCache.set(journeyId, m);
-  }
-  return m;
+/**
+ * Mutes are read from MySQL on every check (a primary-key lookup). No
+ * in-process cache: with several instances, a cache on one node would let a
+ * muted passenger keep posting through another.
+ */
+async function muteReason(journeyId: string, seat: string): Promise<string | null> {
+  const row = await prisma.seatMute.findUnique({ where: { journeyId_seatNumber: { journeyId, seatNumber: seat } }, select: { reason: true } });
+  return row?.reason ?? null;
 }
 export async function isMuted(journeyId: string, seat: string): Promise<boolean> {
-  return (await mutes(journeyId)).has(seat);
+  return (await muteReason(journeyId, seat)) !== null;
 }
 /** What the passenger is told, by cause. Never blame other passengers for a staff action. */
 export async function muteNote(journeyId: string, seat: string): Promise<string | null> {
-  const reason = (await mutes(journeyId)).get(seat);
+  const reason = await muteReason(journeyId, seat);
   if (!reason) return null;
   if (reason === MUTE_BY_STAFF) return 'AbhiBus has paused your messages in this chat. You can still read it, and SOS and support work as normal.';
   if (reason === MUTE_BY_REPORTS) return 'You’ve been muted for the rest of this trip after several passengers reported your messages. You can still read the chat and use SOS.';
   return 'You can’t post in this chat. You can still read it and use SOS.';
 }
-export const forgetMutes = (journeyId: string) => mutedCache.delete(journeyId);
 
 /** Staff mute from the Trip Rooms console. */
 export async function muteSeat(journeyId: string, seat: string) {
-  const existing = (await mutes(journeyId)).get(seat);
-  if (existing === REMOVED_REASON) return;
+  if ((await muteReason(journeyId, seat)) === REMOVED_REASON) return;
   await prisma.seatMute.upsert({ where: { journeyId_seatNumber: { journeyId, seatNumber: seat } }, create: { journeyId, seatNumber: seat, reason: MUTE_BY_STAFF }, update: { reason: MUTE_BY_STAFF } });
-  (await mutes(journeyId)).set(seat, MUTE_BY_STAFF);
   hub.emitToSeat(journeyId, seat, S2C.MUTED, { reason: await muteNote(journeyId, seat) });
 }
 /** Unmute or un-remove (staff decision, e.g. muted or removed by mistake). They can post / rejoin straight away. */
 export async function clearSeat(journeyId: string, seat: string) {
   await prisma.seatMute.deleteMany({ where: { journeyId, seatNumber: seat } });
-  (await mutes(journeyId)).delete(seat);
   hub.emitToSeat(journeyId, seat, S2C.UNMUTED, {});
 }
 
@@ -93,7 +88,6 @@ export async function reportMessage(journeyId: string, reporter: { pnr: string; 
       where: { journeyId_seatNumber: { journeyId, seatNumber: msg.senderSeat } },
       create: { journeyId, seatNumber: msg.senderSeat, reason: MUTE_BY_REPORTS }, update: {},
     });
-    (await mutes(journeyId)).set(msg.senderSeat, MUTE_BY_REPORTS);
     hub.emitToSeat(journeyId, msg.senderSeat, S2C.MUTED, { reason: await muteNote(journeyId, msg.senderSeat) });
     logger.warn({ journeyId, seat: msg.senderSeat }, 'seat auto-muted after reports');
   }
@@ -150,7 +144,6 @@ export async function removeSeat(journeyId: string, seat: string, toThem: string
     where: { journeyId_seatNumber: { journeyId, seatNumber: seat } },
     create: { journeyId, seatNumber: seat, reason: REMOVED_REASON }, update: { reason: REMOVED_REASON },
   });
-  (await mutes(journeyId)).set(seat, REMOVED_REASON);
   const name = hub.nameOf(journeyId, seat);
   hub.emitToSeat(journeyId, seat, S2C.REMOVED, { reason: toThem });
   setTimeout(() => hub.io.in(seatKey(journeyId, seat)).disconnectSockets(true), 500);

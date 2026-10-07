@@ -2,6 +2,7 @@ import { prisma } from '../db';
 import { logger } from '../lib/logger';
 import { newId } from '../lib/ids';
 import { signWebhook } from '../lib/crypto';
+import { strs } from '../lib/json';
 
 /**
  * Platform events. Every event is:
@@ -29,7 +30,7 @@ const BACKOFF_SEC = [0, 10, 60, 300, 1800, 7200, 21600, 43200]; // ≈ 24 h tota
 
 async function deliverWebhooks(e: PlatformEvent) {
   const hooks = await prisma.webhook.findMany({ where: { tenantId: e.tenant!, active: true } });
-  const targets = hooks.filter((h) => h.events.includes(e.type) || h.events.includes('*') || h.events.some((x) => x.endsWith('.*') && e.type.startsWith(x.slice(0, -1))));
+  const targets = hooks.filter((h) => { const ev = strs(h.events); return ev.includes(e.type) || ev.includes('*') || ev.some((x) => x.endsWith('.*') && e.type.startsWith(x.slice(0, -1))); });
   for (const h of targets) void attempt(e, h.id, h.url, h.secret, 0);
 }
 

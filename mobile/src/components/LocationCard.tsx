@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
-import { Linking, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
-import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, Ionicons } from './icons';
 import { Txt } from './Txt';
 import { ago, mmss } from '../utils/format';
 import { LiveDot } from './LiveDot';
@@ -10,6 +10,7 @@ import { stopLiveShare } from '../services/liveLocation';
 import { useServerNow } from '../hooks/useNow';
 import { palette, radius, themed } from '../theme/tokens';
 import type { BusLocationPayload } from '../shared/protocol';
+import { openUrl } from '../services/links';
 
 /** "Bus is currently near Kurnool Highway (NH 44)". Always the bus, never a phone. */
 export function LocationCard({ payload, pending, mine = false }: { payload: BusLocationPayload | null; pending: boolean; mine?: boolean }) {
@@ -57,7 +58,7 @@ function PassengerLocation({ payload, now, mine }: { payload: BusLocationPayload
   if (payload.live) return <LiveLocation payload={payload} mine={mine} />;
   const dist = payload.distanceFromBusM;
   const distLabel = dist == null ? null : dist < 1000 ? `${Math.max(10, Math.round(dist / 10) * 10)} m from the bus` : `${(dist / 1000).toFixed(1)} km from the bus`;
-  const open = () => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${payload.lat},${payload.lng}`);
+  const open = () => openUrl(`https://www.google.com/maps/search/?api=1&query=${payload.lat},${payload.lng}`);
   return (
     <View style={[styles.card, { borderColor: palette.roseBorder }]} accessible accessibilityLabel={`Shared location. ${payload.placeLabel}. ${distLabel ?? ''}`}>
       <View style={styles.head}>
@@ -113,7 +114,7 @@ function LiveLocation({ payload, mine }: { payload: BusLocationPayload; mine: bo
         {payload.accuracyM != null && <Fact icon="locate-outline" text={`±${payload.accuracyM} m`} />}
         <Fact icon="time-outline" text={`Updated ${ago(payload.recordedAt, now)}`} />
       </View>
-      <Pressable onPress={() => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${payload.lat},${payload.lng}`)} style={({ pressed }) => [styles.mapBtn, pressed && { opacity: 0.7 }]} accessibilityRole="link">
+      <Pressable onPress={() => openUrl(`https://www.google.com/maps/search/?api=1&query=${payload.lat},${payload.lng}`)} style={({ pressed }) => [styles.mapBtn, pressed && { opacity: 0.7 }]} accessibilityRole="link">
         <Ionicons name="navigate-outline" size={15} color={palette.text} />
         <Txt v="smallStrong">Open in Maps</Txt>
       </Pressable>

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover: iOS safe areas via env(); maximum-scale=1: no zoom-on-focus inside the WebView -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0B132B" />
+    <meta name="referrer" content="no-referrer" />
+    <title>AbhiBus Trip Chat</title>
+    <!-- Per-environment settings (API URL), written by the web container at start-up. -->
+    <script src="/config.js"></script>
+    <style id="expo-reset">
+      html, body { height: 100%; background: #0B132B; }
+      body { overflow: hidden; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+      #root { display: flex; height: 100%; flex: 1; }
+    </style>
+  </head>
+  <body>
+    <noscript>Trip chat needs JavaScript.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

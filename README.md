@@ -10,32 +10,43 @@ These screenshots are the real React Native screens rendered on web with seeded 
 
 ---
 
-## 1. Run the demo in 10 minutes
+## 1. Run locally
 
-You need Node 20+, Docker, and Xcode or Android Studio. Voice-to-text is a native module, so the app runs as an Expo **development build**. Expo Go won't work.
+You need Node 20+ and a **local MySQL 8+** (no Docker). Redis is optional on one instance. For the native demo app you also need Xcode or Android Studio: voice-to-text is a native module, so the app runs as an Expo **development build**, and Expo Go won't work.
 
 ```bash
-# 0. Copy the shared contract into both apps (already done in this zip; re-run after editing /shared)
+# 0. Copy the shared contract into both apps (re-run after editing /shared)
 ./scripts/sync-shared.sh
 
-# 1. Database
-docker compose up -d postgres
+# 1. Database (once), on your local MySQL
+mysql -u root <<'SQL'
+CREATE DATABASE journey_chat CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'journey_chat'@'localhost' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON journey_chat.* TO 'journey_chat'@'localhost';
+SQL
 
-# 2. Server
+# 2. Optional: Redis (needed only when you run 2+ server instances)
+brew install redis && brew services start redis   # then REDIS_URL=redis://127.0.0.1:6379
+
+# 3. Server
 cd server
-cp .env.example .env              # then replace the 4 secrets (see below)
-npm install
-npx prisma migrate dev --name init
-npm run dev                       # → 🚌 Journey chat on :4000 (booking=mock, demo=true)
+cp .env.example .env              # set CHAT_DATABASE_URL, the secrets and PARTNER_API_KEYS (see below)
+npm ci
+npx prisma migrate deploy         # creates the tables in journey_chat
+npm run dev                       # → 🚌 Journey chat on :4000 (booking=partner, tracking=push)
 
-# 3. App (new terminal)
+# 4. Try the partner API: see docs/API_CURL.md
+
+# 5. Demo app (optional, new terminal)
 cd mobile
 cp .env.example .env              # set EXPO_PUBLIC_API_URL (see the comments in the file)
 npm install
 npx expo run:ios                  # or: npx expo run:android
 ```
 
-Generate the four secrets in `server/.env` with `openssl rand -hex 32`. They are `JWT_SECRET`, `PHONE_HASH_PEPPER`, `CONDUCTOR_API_KEY` and `OPS_API_KEY`. The server refuses to start if any of them is weak or missing.
+For the scripted leadership demo below, set `BOOKING_SOURCE=mock`, `TRACKING_SOURCE=mock` and `DEMO_MODE=true` in `server/.env`. For the real flow (bookings pushed by AbhiBus), use `partner`, `push` and `false`.
+
+Generate the secrets in `server/.env` with `openssl rand -hex 32`. They are `JWT_SECRET`, `PHONE_HASH_PEPPER`, `CONDUCTOR_API_KEY`, `OPS_API_KEY` and `PARTNER_API_KEYS`. The server refuses to start if any of them is weak or missing.
 
 ### The leadership walkthrough
 
@@ -74,7 +85,7 @@ shared/            Realtime contract + content filter. The single source of trut
   protocol.ts        every socket event, payload and ack type
   moderation.ts      phone / link / UPI / profanity filter (runs on phone AND server)
 server/            Node 20 + TypeScript + Express + Socket.io + Prisma
-  prisma/schema.prisma        ephemeral chat store (PostgreSQL)
+  prisma/schema.prisma        ephemeral chat store (MySQL)
   src/booking/                abrs_new bridge (read-only)  ← start here for integration
   src/realtime/socketServer.ts  WebSocket gateway, women-room gate, all handlers
   src/realtime/hub.ts           rooms, presence, batched read receipts, fan-out
@@ -188,22 +199,32 @@ The full types are in `shared/protocol.ts`. Every client→server event returns 
 
 ---
 
-## 7. Status and what's left before production
+## 7. Production
 
-**Verified:**
-- Server and app both typecheck with zero errors under strict TypeScript.
-- The Prisma schema validates.
-- The Android Hermes bundle builds through Metro.
-- The moderation suite passes (`npm run test:moderation`).
-- The screens render, and the screenshots above were taken from them.
+The service runs **independently**: the AbhiBus backend pushes bookings, schedule changes and GPS to `/v1/partner/*`, rooms open automatically 30 minutes before departure, and the app opens the chat with a session the backend mints. Set `BOOKING_SOURCE=partner` and `TRACKING_SOURCE=push`.
 
-**Not yet verified:** a full end-to-end run against a live Postgres. The development sandbox had no database, so do a smoke test with the demo above.
+- **[docs/HANDOFF.md](docs/HANDOFF.md)**: what to send to each team.
+- **[docs/API_CURL.md](docs/API_CURL.md)**: copy-paste curl for every backend call, plus webhooks and signature checks.
+- **[docs/INTEGRATION.md](docs/INTEGRATION.md)**: API contract and field rules.
+- **[docs/WEBVIEW_PLAN.md](docs/WEBVIEW_PLAN.md)**: how the iOS (Swift) and Android (React Native) apps show the chat in a WebView, with reference code.
 
-**Integration TODOs** (each one is marked `TODO(...)` in the code):
-- `auth/appSession.ts`: verify the AbhiBus customer session and that the PNR belongs to that account.
-- `tracking/gpsProvider.ts`: query the latest fix from `abrs_tracking` (10.0.2.229).
-- `features/rewards.ts`: credit points through the wallet service. The chat service never writes to `abrs_new`.
-- `features/sos.ts`: notify emergency contacts (for example via `prod_whatsapp`) and set `SUPPORT_WEBHOOK_URL` / `SUPPORT_PHONE`.
-- Conductor endpoints use a static API key. Swap it for the operator app's auth plus a check that the conductor is assigned to that bus.
-- To run several server instances, set `REDIS_URL` and keep sticky sessions on the load balancer. The in-memory rate limiter assumes stickiness.
-- Push notification at departure that deep-links to `abhibus-chat://join?pnr=…&seat=…`. The join screen already handles this link.
+**The web chat** (the screen inside the app WebViews) is `mobile/` built for the web:
+```bash
+cd mobile
+npm run build:web                                   # → dist/ (checks icon subsets first)
+docker build -f Dockerfile.web -t trip-chat-web .   # nginx image; run with API_URL=… [ENABLE_HARNESS=true]
+```
+For local development, run `npx expo start --web`, then open `http://localhost:8081/harness/` to drive it the way the app does.
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**: topology, load-balancer affinity, sizing (load-tested at 2,000 rooms and 10,000 sockets), configuration, monitoring and runbook.
+
+**Verified on MySQL 9.7:** strict typecheck, the moderation suite, 14 partner-API functional checks (`npm run test:partner`), a 2,000-journey / 10,000-socket load test (`npm run loadtest`), a two-instance run with Redis plus leader handover, every curl in `docs/API_CURL.md`, and the Docker image against a database built only from migrations. The web chat passes 14 end-to-end checks in headless Chrome (iOS and Android bridge transports, voice, back, theme, session refresh, the harness), with zero CSP violations.
+
+**Still open before go-live** (not code in this repo):
+- AbhiBus side: the booking event feed, route stops and GPS feed per service, the `room.opened` push notification, and the session endpoint in the AbhiBus backend (see INTEGRATION.md, "What each side needs to share").
+- `features/sos.ts`: notify the passenger's emergency contacts, and wire `SUPPORT_WEBHOOK_URL` to real P1 paging.
+- `features/rewards.ts`: credit toll-game points through the wallet service.
+- Legal sign-off on retention (SOS records kept, reported messages kept 30 days).
+- Rerun the load test on staging with production-sized databases.
+- Keep the Trip Rooms platform bridge (`PLATFORM_*`) off at launch; `platform/` is still a prototype (it runs on MySQL too: `trip_rooms`).
+
+Legacy direct read of `abrs_new` (§3) remains available as `BOOKING_SOURCE=mysql`, but partner push is the supported production path.

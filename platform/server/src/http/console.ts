@@ -37,6 +37,7 @@ import { broadcastRoomUpdate } from '../core/alerts';
 import { roomFeatures } from '../core/tenants';
 import { parseRef, toRef } from '../shared/refs';
 import { config } from '../config';
+import { strs } from '../lib/json';
 
 /**
  * ============================================================================
@@ -64,7 +65,7 @@ consoleApi.post('/auth/login', wrap(async (req, res) => {
   if (!u || !u.active || !verifySecret(b.password, u.passwordHash)) throw new ApiError('unauthorized', 'Email or password is incorrect.');
   await prisma.user.update({ where: { id: u.id }, data: { lastLoginAt: new Date() } });
   await audit({ actor: u.email, action: 'user.login' });
-  const token = signUserToken({ uid: u.id, email: u.email, role: u.role as Role, tenants: u.tenantIds });
+  const token = signUserToken({ uid: u.id, email: u.email, role: u.role as Role, tenants: strs(u.tenantIds) });
   res.json({ token, user: userDto(u) });
 }));
 /** Sign out: the token stops working everywhere (other tabs, the live stream), not just in this browser. */
@@ -73,8 +74,8 @@ consoleApi.post('/auth/logout', requireUser(), wrap(async (req, res) => {
   await audit({ actor: actor(req), action: 'user.logout' });
   res.json({ signed_out: true });
 }));
-const userDto = (u: { id: string; email: string; name: string; role: string; tenantIds: string[]; active: boolean; lastLoginAt: Date | null; createdAt: Date }) => ({
-  id: u.id, email: u.email, name: u.name, role: u.role, role_label: ROLE_LABELS[u.role as Role], tenants: u.tenantIds, active: u.active,
+const userDto = (u: { id: string; email: string; name: string; role: string; tenantIds: unknown; active: boolean; lastLoginAt: Date | null; createdAt: Date }) => ({
+  id: u.id, email: u.email, name: u.name, role: u.role, role_label: ROLE_LABELS[u.role as Role], tenants: strs(u.tenantIds), active: u.active,
   permissions: ROLE_PERMISSIONS[u.role as Role], last_login_at: u.lastLoginAt?.toISOString() ?? null, created_at: u.createdAt.toISOString(),
 });
 consoleApi.get('/me', requireUser(), wrap(async (req, res) => {
@@ -502,7 +503,7 @@ consoleApi.get('/search', requireUser('rooms.read'), wrap(async (req, res) => {
   if (q.length < 2) return res.json({ rooms: [], issues: [], updates: [], campaigns: [] });
   const ids = await myTenants(req);
   const ref = parseRef(q);
-  const like = { contains: q, mode: 'insensitive' as const };
+  const like = { contains: q }; // MySQL utf8mb4 collations are case-insensitive already
   const roomSel = { id: true, title: true, subtitle: true, tenantId: true, vertical: true, state: true, tripKey: true, departsAt: true } as const;
   const roomOut = (r: { id: string; title: string; subtitle: string; tenantId: string; vertical: string; state: string; tripKey: string; departsAt: Date }, why?: string) =>
     ({ id: r.id, ref: toRef(r.id), title: r.title, subtitle: r.subtitle, tenant_id: r.tenantId, vertical: r.vertical, state: r.state, trip_key: r.tripKey, departs_at: r.departsAt.toISOString(), why });
@@ -512,7 +513,7 @@ consoleApi.get('/search', requireUser('rooms.read'), wrap(async (req, res) => {
     prisma.action.findMany({ where: { tenantId: { in: ids }, OR: ref?.kind === 'act' ? [{ id: { startsWith: ref.idPrefix } }] : [{ title: like }, { detail: like }] }, orderBy: { createdAt: 'desc' }, take: 6 }),
     ref?.kind === 'evt' ? prisma.tripEvent.findMany({ where: { id: { startsWith: ref.idPrefix } }, take: 5 }) : Promise.resolve([]),
     can(me(req).role, 'campaigns.read') ? prisma.campaign.findMany({ where: ref?.kind === 'cmp' ? { id: { startsWith: ref.idPrefix } } : { OR: [{ name: like }, { advertiser: like }] }, take: 5 }) : Promise.resolve([]),
-    !ref && can(me(req).role, 'members.reveal') && /^[A-Z0-9-]{5,}$/i.test(q) ? prisma.member.findMany({ where: { bookingRef: { equals: q, mode: 'insensitive' }, room: { tenantId: { in: ids } } }, select: { roomId: true, handle: true }, take: 5 }) : Promise.resolve([]),
+    !ref && can(me(req).role, 'members.reveal') && /^[A-Z0-9-]{5,}$/i.test(q) ? prisma.member.findMany({ where: { bookingRef: { equals: q }, room: { tenantId: { in: ids } } }, select: { roomId: true, handle: true }, take: 5 }) : Promise.resolve([]),
   ]);
   if (byBooking.length) await audit({ actor: actor(req), action: 'search.booking_ref', reason: 'console search', data: { rooms: byBooking.map((m) => m.roomId) } });
   const extraRooms = await prisma.room.findMany({ where: { tenantId: { in: ids }, id: { in: [...new Set([...byBooking.map((m) => m.roomId), ...updates.map((u) => u.roomId), ...issues.map((a) => a.roomId)])] } }, select: roomSel });
@@ -712,8 +713,8 @@ consoleApi.patch('/config/:tenant', requireUser('config.write'), wrap(async (req
 }));
 
 // ------------------------------------------------------ developer: keys ---
-const keyDto = (k: { id: string; tenantId: string; name: string; clientId: string; secretHint: string; scopes: string[]; createdAt: Date; lastUsedAt: Date | null; revokedAt: Date | null; createdBy: string | null }) => ({
-  id: k.id, tenant: k.tenantId, name: k.name, client_id: k.clientId, secret_hint: `••••${k.secretHint}`, scopes: k.scopes, created_by: k.createdBy,
+const keyDto = (k: { id: string; tenantId: string; name: string; clientId: string; secretHint: string; scopes: unknown; createdAt: Date; lastUsedAt: Date | null; revokedAt: Date | null; createdBy: string | null }) => ({
+  id: k.id, tenant: k.tenantId, name: k.name, client_id: k.clientId, secret_hint: `••••${k.secretHint}`, scopes: strs(k.scopes), created_by: k.createdBy,
   created_at: k.createdAt.toISOString(), last_used_at: k.lastUsedAt?.toISOString() ?? null, revoked_at: k.revokedAt?.toISOString() ?? null,
 });
 consoleApi.get('/keys', requireUser('keys.manage'), wrap(async (req, res) => {

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { interpolateColor, useAnimatedStyle, withSpring, type SharedValue } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons } from './icons';
+import * as Haptics from '../services/haptics';
 import { Txt } from './Txt';
 import { useShallow } from 'zustand/react/shallow';
 import { useChat } from '../store/chatStore';
@@ -10,10 +10,10 @@ import { motion, palette, radius, roomTheme, themed } from '../theme/tokens';
 import type { RoomType } from '../shared/protocol';
 
 /**
- * Two-room segmented control. Rendered by the screen ONLY when the passenger's
- * own booking gender is 'F'. The sliding pill shifts from cyan to rose, and so
- * does every accent in the room below — a deliberate "you are somewhere else
- * now" signal.
+ * Two-room segmented control: [👥 Everyone | 🛡 Women Zone •]. Rendered by the
+ * screen ONLY when the passenger's own booking gender is 'F'. The active tab's
+ * label takes its room's accent (red / rose), and so does every accent in the
+ * room below — a deliberate "you are somewhere else now" signal.
  */
 export function RoomSwitcher({ roomIndex }: { roomIndex: SharedValue<number> }) {
   const active = useChat((s) => s.activeRoom);
@@ -21,11 +21,9 @@ export function RoomSwitcher({ roomIndex }: { roomIndex: SharedValue<number> }) 
   const setActive = useChat((s) => s.setActiveRoom);
   const [w, setW] = useState(0);
 
-  const tints = [roomTheme.MAIN_COMMON.tint, roomTheme.WOMEN_ONLY.tint];
   const borders = [roomTheme.MAIN_COMMON.border, roomTheme.WOMEN_ONLY.border];
   const pill = useAnimatedStyle(() => ({
     transform: [{ translateX: roomIndex.value * (w / 2) }],
-    backgroundColor: interpolateColor(roomIndex.value, [0, 1], tints),
     borderColor: interpolateColor(roomIndex.value, [0, 1], borders),
   }));
 
@@ -48,12 +46,8 @@ export function RoomSwitcher({ roomIndex }: { roomIndex: SharedValue<number> }) 
             <Pressable key={rt} onPress={() => select(rt)} style={styles.tab} accessibilityRole="tab" accessibilityState={{ selected: on }}
               accessibilityLabel={`${t.name}${count ? `, ${count} unread` : ''}`}>
               <Ionicons name={on ? t.icon : (`${t.icon}-outline` as any)} size={15} color={on ? t.accent : palette.textTertiary} />
-              <Txt v="smallStrong" color={on ? palette.text : palette.textSecondary}>{t.name}</Txt>
-              {count > 0 && !on && (
-                <View style={[styles.badge, { backgroundColor: t.accent }]}>
-                  <Txt v="micro" color={t.onAccent}>{count > 9 ? '9+' : count}</Txt>
-                </View>
-              )}
+              <Txt v="smallStrong" color={on ? t.accent : palette.textSecondary}>{t.name}</Txt>
+              {count > 0 && !on && <View style={[styles.unreadDot, { backgroundColor: t.accent }]} />}
             </Pressable>
           );
         })}
@@ -63,9 +57,9 @@ export function RoomSwitcher({ roomIndex }: { roomIndex: SharedValue<number> }) 
 }
 
 const styles = themed(() => ({
-  wrap: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 0, backgroundColor: palette.navy },
-  track: { flexDirection: 'row', height: 36, padding: 4, borderRadius: radius.pill, backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairline },
-  pill: { position: 'absolute', top: 3, left: 4, bottom: 3, borderRadius: radius.pill, borderWidth: 1 },
+  wrap: { paddingHorizontal: 12, paddingBottom: 6, backgroundColor: palette.navy },
+  track: { flexDirection: 'row', height: 42, padding: 4, borderRadius: radius.chip + 2, backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairline },
+  pill: { position: 'absolute', top: 3, left: 4, bottom: 3, borderRadius: radius.chip, borderWidth: 1, backgroundColor: palette.surfaceRaised },
   tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  badge: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
+  unreadDot: { width: 7, height: 7, borderRadius: 4, marginLeft: 1 },
 }));

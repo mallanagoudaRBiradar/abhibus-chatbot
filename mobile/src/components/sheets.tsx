@@ -1,9 +1,10 @@
 import React, { forwardRef, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { BottomSheetScrollView, BottomSheetTextInput, type BottomSheetModal } from '@gorhom/bottom-sheet';
-import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withSpring, withTiming, runOnJS, ZoomIn } from 'react-native-reanimated';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import Animated, { Easing, FadeIn, useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming, runOnJS, ZoomIn } from 'react-native-reanimated';
+import { Ionicons, MaterialCommunityIcons } from './icons';
+import * as Haptics from '../services/haptics';
+import { openUrl } from '../services/links';
 import QRCode from 'react-native-qrcode-svg';
 import { currentCoords, LocationError } from '../services/location';
 import { startLiveShare, stopLiveShare } from '../services/liveLocation';
@@ -14,6 +15,8 @@ import { Txt } from './Txt';
 import { Avatar } from './Avatar';
 import { personFrom, usePeople } from '../hooks/usePeople';
 import { LandmarkCard } from './LandmarkCard';
+import { TripPanel } from './TripPanel';
+import { personaOf, personaTagline } from '../shared/personas';
 import { toast } from './Toast';
 import { useChat, type UiMessage } from '../store/chatStore';
 import { chatSocket } from '../services/socket';
@@ -22,7 +25,7 @@ import { berthLabel, berthOf } from '../utils/seat';
 import { clock } from '../utils/format';
 import { useServerNow } from '../hooks/useNow';
 import { font, motion, palette, radius, roomTheme, themed } from '../theme/tokens';
-import { type GameKind, type QrInvite, LIVE_LOCATION_MINUTES, isSystemReactionKey, POLL_LIMITS, REACTIONS, REPORT_REASONS, pollVotes, type PollPayload, type ReactionEmoji, type ReportReason } from '../shared/protocol';
+import { type TripInfo, type GameKind, RPS_NAMES, RPS_PICKS, type QrInvite, LIVE_LOCATION_MINUTES, isSystemReactionKey, POLL_LIMITS, REACTIONS, REPORT_REASONS, pollVotes, type PollPayload, type ReactionEmoji, type ReportReason } from '../shared/protocol';
 
 type Ref = BottomSheetModal;
 // The sheet's input keeps the sheet above the keyboard on phones, but relies on a
@@ -51,7 +54,7 @@ export const PassengerSheet = forwardRef<Ref, { onOpenPerson: (seat: string) => 
   return (
     <Sheet ref={ref} scrollable>
       <BottomSheetScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 20 }}>
-        <Txt v="h3">{`${presence.count} on board`}</Txt>
+        <Txt v="h3">{`${presence.count} ${roomType === 'WOMEN_ONLY' ? 'in Women Zone' : 'in this chat'}`}</Txt>
         <Txt v="small" color={palette.textSecondary} style={{ marginTop: 4 }}>{`${online} online now · ${parts}`}</Txt>
         <View style={styles.genderRow}>
           {roomType !== 'WOMEN_ONLY' && <CountPill icon="man" label="Men" value={presence.men} />}
@@ -215,6 +218,7 @@ export const PersonSheet = forwardRef<Ref, { seat: string | null; onReport: (sea
       <View style={{ alignItems: 'center', gap: 6, marginTop: 4 }}>
         <Avatar name={member.name} avatar={member.avatar} size={76} online={member.online} />
         <Txt v="h3" style={{ marginTop: 6 }}>{member.name}</Txt>
+        {personaOf(member.avatar) && <Txt v="small" color={palette.textSecondary}>{`${personaOf(member.avatar)!.kind === 'hero' ? '🦸' : '🎬'} ${personaTagline(personaOf(member.avatar)!)}`}</Txt>}
         <Txt v="small" color={palette.textSecondary} style={{ textAlign: 'center' }}>{personStatus(member)}</Txt>
         {member.guest && <Txt v="meta" color={palette.textTertiary} style={{ textAlign: 'center' }}>Booked on another app, so their ticket isn’t verified by AbhiBus.</Txt>}
       </View>
@@ -254,11 +258,35 @@ function Action({ icon, label, onPress, danger, trailing }: { icon: any; label: 
 export const SosSheet = forwardRef<Ref>((_, ref) => {
   const token = useChat((s) => s.session!.token);
   const supportPhone = useChat((s) => s.session!.supportPhone);
-  const isWoman = useChat((s) => s.session!.me.gender === 'F');
+  const journey = useChat((s) => s.session!.journey);
+  const insets = useSafeAreaInsets();
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [place, setPlace] = useState<string | null>(null);
   const fill = useSharedValue(0);
   const fillStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: fill.value }] }));
+  const pulse = useSharedValue(0);
+  useEffect(() => { pulse.value = withRepeat(withTiming(1, { duration: 1400, easing: Easing.out(Easing.quad) }), -1, false); }, []);
+  const ring = useAnimatedStyle(() => ({ opacity: 0.45 * (1 - pulse.value), transform: [{ scaleX: 1 + pulse.value * 0.06 }, { scaleY: 1 + pulse.value * 0.3 }] }));
+  // Where the bus is, for "send to family" (from our DB: GPS fix or timetable estimate).
+  const [bus, setBus] = useState<TripInfo['bus']>(null);
+  // The sheet mounts with the screen, often before the socket connects: keep asking until we have it, then refresh every minute.
+  useEffect(() => {
+    let alive = true;
+    let t: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      const a = await chatSocket.tripInfo();
+      if (!alive) return;
+      if (a.ok) setBus(a.data.bus);
+      t = setTimeout(load, a.ok ? 60_000 : 4_000);
+    };
+    void load();
+    return () => { alive = false; clearTimeout(t); };
+  }, []);
+  const shareWithFamily = () => {
+    const where = bus ? ` Bus is ${/^on the way/i.test(bus.placeLabel) ? bus.placeLabel.toLowerCase() : `near ${bus.placeLabel}`}: https://maps.google.com/?q=${bus.lat},${bus.lng}` : '';
+    const text = `I’m on the ${journey.operatorName} bus ${journey.busNumber}, ${journey.sourceCity} to ${journey.destinationCity}.${where}`;
+    void openUrl(`https://wa.me/?text=${encodeURIComponent(text)}`);
+  };
 
   const fire = async () => {
     setState('sending');
@@ -273,57 +301,101 @@ export const SosSheet = forwardRef<Ref>((_, ref) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     fill.value = withTiming(1, { duration: 1500, easing: Easing.linear }, (done) => { if (done) runOnJS(fire)(); });
   };
-  const pressOut = () => { if (state === 'idle') fill.value = withTiming(0, { duration: 200 }); };
+  const pressOut = () => { if (state === 'idle' || state === 'error') fill.value = withTiming(0, { duration: 200 }); };
+
+  const tiles = (list: { num: string; label: string; icon: string }[], tone: string, soft: string, border: string) => (
+    <View style={styles.callGrid}>
+      {list.map((c) => (
+        <Pressable key={c.num} onPress={() => openUrl(`tel:${c.num}`)} style={({ pressed }) => [styles.callTile, { borderColor: border, backgroundColor: soft }, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button" accessibilityLabel={`Call ${c.label}, ${c.num}`}>
+          <Ionicons name={c.icon as any} size={20} color={tone} />
+          <Txt v="title" color={tone} style={{ fontVariant: ['tabular-nums'] }}>{c.num}</Txt>
+          <Txt v="micro" color={palette.textSecondary} style={{ textAlign: 'center' }}>{c.label}</Txt>
+        </Pressable>
+      ))}
+    </View>
+  );
 
   return (
-    <Sheet ref={ref} onDismiss={() => { if (state !== 'sending') { setState('idle'); fill.value = 0; } }}>
+    <Sheet ref={ref} scrollable onDismiss={() => { if (state !== 'sending') { setState('idle'); fill.value = 0; } }}>
+      <BottomSheetScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: insets.bottom + 20 }}>
       {state === 'sent' ? (
         <Animated.View entering={FadeIn} style={{ gap: 10 }}>
           <View style={styles.sosIconOk}><Ionicons name="shield-checkmark" size={28} color={palette.green} /></View>
           <Txt v="h3">AbhiBus safety team alerted</Txt>
           <Txt v="body" color={palette.textSecondary}>
-            {`We’ve shared your details and the bus location${place ? ` (near ${place})` : ''} with our team and your emergency contacts. They will call you shortly.`}
+            {`We’ve shared your details and the bus location${place ? ` (near ${place})` : ''} with our team. They will call you shortly.`}
           </Txt>
           <Txt v="small" color={palette.textTertiary}>Other passengers and the bus crew have not been notified.</Txt>
         </Animated.View>
       ) : (
-        <View style={{ gap: 10 }}>
+        <View style={{ gap: 8 }}>
           <Txt v="h3">Need help right now?</Txt>
-          <Txt v="body" color={palette.textSecondary}>
-            Hold the button to alert the AbhiBus safety team. It quietly sends your details and the bus location. Nobody on the bus is notified.
-          </Txt>
-          <Pressable onPressIn={pressIn} onPressOut={pressOut} disabled={state === 'sending'} style={styles.holdBtn}
-            accessibilityRole="button" accessibilityLabel="Hold to send SOS alert" accessibilityHint="Press and hold for one and a half seconds">
-            <Animated.View style={[styles.holdFill, fillStyle]} />
-            {state === 'sending' ? <ActivityIndicator color="#fff" /> : (
-              <Txt v="bodyStrong" color="#fff">{state === 'error' ? 'Couldn’t send. Hold to try again' : 'Hold to send SOS'}</Txt>
-            )}
-          </Pressable>
+          <Txt v="body" color={palette.textSecondary}>Hold to quietly alert the AbhiBus safety team with your details and the bus location. Nobody on the bus is notified.</Txt>
+          <View style={{ marginTop: 6 }}>
+            <Animated.View style={[styles.holdRing, ring]} />
+            <Pressable onPressIn={pressIn} onPressOut={pressOut} disabled={state === 'sending'} style={styles.holdBtn}
+              accessibilityRole="button" accessibilityLabel="Hold to send SOS alert" accessibilityHint="Press and hold for one and a half seconds">
+              <Animated.View style={[styles.holdFill, fillStyle]} />
+              {state === 'sending' ? <ActivityIndicator color="#fff" /> : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="hand-left" size={18} color="#fff" />
+                  <Txt v="bodyStrong" color="#fff">{state === 'error' ? 'Couldn’t send. Hold to try again' : 'Hold to send SOS'}</Txt>
+                </View>
+              )}
+            </Pressable>
+          </View>
         </View>
       )}
+
       {/* One tap, no hold: nothing should stand between someone and help. */}
       <Txt v="micro" color={palette.textTertiary} style={styles.callLabel}>CALL DIRECTLY</Txt>
+      {tiles([
+        { num: '112', label: 'Emergency', icon: 'alert-circle' },
+        { num: '100', label: 'Police', icon: 'shield' },
+        { num: '108', label: 'Ambulance', icon: 'medkit' },
+      ], palette.red, palette.redSoft, palette.redBorder)}
+
+      {/* For everyone: anyone on the bus can call for a woman who needs help, or report a highway breakdown/accident. */}
+      <Txt v="micro" color={palette.textTertiary} style={styles.callLabel}>HELPLINES</Txt>
       <View style={styles.callGrid}>
         {[
-          { num: '112', label: 'Emergency', icon: 'alert-circle', tone: palette.red },
-          { num: '100', label: 'Police', icon: 'shield', tone: palette.red },
-          { num: '108', label: 'Ambulance', icon: 'medkit', tone: palette.red },
-          ...(isWoman ? [{ num: '181', label: 'Women helpline', icon: 'woman', tone: palette.rose }] : []),
+          { num: '181', label: 'Women Helpline (24×7)', icon: 'woman', tone: palette.rose, soft: palette.roseSoft, border: palette.roseBorder },
+          { num: '1033', label: 'Highway Helpline', icon: 'car', tone: palette.amber, soft: palette.amberSoft, border: palette.amberBorder },
         ].map((c) => (
-          <Pressable key={c.num} onPress={() => Linking.openURL(`tel:${c.num}`)} style={({ pressed }) => [styles.callTile, { borderColor: c.tone === palette.rose ? palette.roseBorder : palette.redBorder }, pressed && { opacity: 0.7 }]}
+          <Pressable key={c.num} onPress={() => openUrl(`tel:${c.num}`)} style={({ pressed }) => [styles.callTile, { borderColor: c.border, backgroundColor: c.soft }, pressed && { opacity: 0.7 }]}
             accessibilityRole="button" accessibilityLabel={`Call ${c.label}, ${c.num}`}>
             <Ionicons name={c.icon as any} size={20} color={c.tone} />
             <Txt v="title" color={c.tone} style={{ fontVariant: ['tabular-nums'] }}>{c.num}</Txt>
-            <Txt v="micro" color={palette.textSecondary}>{c.label}</Txt>
+            <Txt v="micro" color={palette.textSecondary} style={{ textAlign: 'center' }}>{c.label}</Txt>
           </Pressable>
         ))}
       </View>
+
+      <Pressable onPress={shareWithFamily} style={({ pressed }) => [styles.familyBtn, pressed && { opacity: 0.8 }]} accessibilityRole="button"
+        accessibilityLabel="Send the bus location to family on WhatsApp">
+        <Ionicons name="logo-whatsapp" size={20} color={palette.green} />
+        <View style={{ flex: 1 }}>
+          <Txt v="smallStrong">Send bus location to family</Txt>
+          <Txt v="micro" color={palette.textSecondary}>{bus ? `WhatsApp: bus number, route and a map pin${bus.source === 'GPS' ? ' (live GPS)' : ''}` : 'WhatsApp: bus number and route'}</Txt>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={palette.textTertiary} />
+      </Pressable>
+
       {supportPhone && (
-        <Pressable onPress={() => Linking.openURL(`tel:${supportPhone}`)} style={[styles.callBtn, { marginTop: 10, flex: 0 }]} accessibilityRole="button">
+        <Pressable onPress={() => openUrl(`tel:${supportPhone}`)} style={[styles.callBtn, { marginTop: 14, flex: 0 }]} accessibilityRole="button">
           <Ionicons name="headset-outline" size={16} color={palette.text} />
           <Txt v="smallStrong">Call AbhiBus support</Txt>
         </Pressable>
       )}
+      {journey.operatorHelpline && (
+        <Pressable onPress={() => openUrl(`tel:${journey.operatorHelpline}`)} style={[styles.callBtn, { marginTop: 10, flex: 0 }]} accessibilityRole="button"
+          accessibilityLabel={`Call ${journey.operatorName} helpline`}>
+          <Ionicons name="bus-outline" size={16} color={palette.text} />
+          <Txt v="smallStrong">Call {journey.operatorName} helpline</Txt>
+        </Pressable>
+      )}
+      </BottomSheetScrollView>
     </Sheet>
   );
 });
@@ -414,7 +486,7 @@ export const GameSheet = forwardRef<Ref>((_, ref) => {
             <StepBtn label="+5" onPress={() => nudge(5)} />
           </View>
           <Pressable onPress={submit} disabled={busy} style={({ pressed }) => [styles.primary, { backgroundColor: palette.amber }, pressed && { opacity: 0.85 }]} accessibilityRole="button">
-            {busy ? <ActivityIndicator color={palette.navy} /> : <Txt v="bodyStrong" color={palette.navy}>Lock in my guess</Txt>}
+            {busy ? <ActivityIndicator color={palette.navyDeep} /> : <Txt v="bodyStrong" color={palette.navyDeep}>Lock in my guess</Txt>}
           </Pressable>
         </>
       ) : null}
@@ -432,12 +504,14 @@ function StepBtn({ label, onPress }: { label: string; onPress: () => void }) {
 const roundTo5 = (ms: number) => Math.ceil(ms / 300_000) * 300_000;
 
 // ================================================================== Trip ===
-export const TripSheet = forwardRef<Ref, { onLeave: () => void; onInvite?: () => void }>(({ onLeave, onInvite }, ref) => {
+export const TripSheet = forwardRef<Ref, { onLeave: () => void; onInvite?: () => void; onOpenPassengers: () => void; onOpenSettings: () => void }>(({ onLeave, onInvite, onOpenPassengers, onOpenSettings }, ref) => {
   const s = useChat((st) => st.session!);
   const purgeAt = useChat((st) => st.purgeAt);
   const [confirm, setConfirm] = useState(false);
+  const insets = useSafeAreaInsets();
   return (
-    <Sheet ref={ref} onDismiss={() => setConfirm(false)}>
+    <Sheet ref={ref} onDismiss={() => setConfirm(false)} scrollable>
+      <BottomSheetScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: insets.bottom + 20 }}>
       {confirm ? (
         <Animated.View entering={FadeIn.duration(160)}>
           <Txt v="h3">Exit this trip chat?</Txt>
@@ -456,18 +530,24 @@ export const TripSheet = forwardRef<Ref, { onLeave: () => void; onInvite?: () =>
         </Animated.View>
       ) : (
         <>
-          <Txt v="h3">{s.journey.routeName}</Txt>
+          <View style={styles.tripHead}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Txt v="h3" numberOfLines={1}>{`${s.journey.sourceCity} → ${s.journey.destinationCity}`}</Txt>
+              <Txt v="small" color={palette.textSecondary} numberOfLines={1} style={{ marginTop: 2 }}>{`${s.journey.operatorName} · ${s.journey.busNumber}`}</Txt>
+            </View>
+            <Pressable onPress={() => { Haptics.selectionAsync(); onOpenSettings(); }} hitSlop={8}
+              style={({ pressed }) => [styles.gear, pressed && { backgroundColor: palette.surfaceRaised, transform: [{ rotate: '30deg' }] }]}
+              accessibilityRole="button" accessibilityLabel="Settings">
+              <Ionicons name="settings-outline" size={20} color={palette.text} />
+            </Pressable>
+          </View>
+          <TripPanel onOpenPassengers={onOpenPassengers} />
           <View style={styles.tripRows}>
-            <Row k="Bus" v={`${s.journey.busNumber}, ${s.journey.operatorName}`} />
-            <Row k="Departed" v={clock(s.journey.startTime)} />
-            <Row k="Expected arrival" v={clock(s.journey.estimatedEndTime)} />
+            <Row k="Departs" v={clock(s.journey.startTime)} />
+            <Row k="Scheduled arrival" v={clock(s.journey.estimatedEndTime)} />
             <Row k="You appear as" v={s.me.name} />
             <Row k="Ticket" v={s.me.pnrMasked} />
             {purgeAt && <Row k="Chat deleted at" v={clock(purgeAt)} />}
-          </View>
-          <View style={styles.appearance}>
-            <Txt v="small" color={palette.textSecondary}>Appearance</Txt>
-            <ThemeSwitch />
           </View>
           <View style={styles.actions}>
             {!s.me.guest && onInvite && <Action icon="qr-code-outline" label="Invite with QR (booked on another app)" onPress={onInvite} />}
@@ -475,6 +555,7 @@ export const TripSheet = forwardRef<Ref, { onLeave: () => void; onInvite?: () =>
           </View>
         </>
       )}
+      </BottomSheetScrollView>
     </Sheet>
   );
 });
@@ -620,7 +701,7 @@ export const QrInviteSheet = forwardRef<Ref>((_, ref) => {
           </Animated.View>
         ) : (
           <Pressable onPress={create} disabled={busy} style={({ pressed }) => [styles.primary, { marginTop: 18, backgroundColor: palette.cyan }, pressed && { opacity: 0.85 }]} accessibilityRole="button">
-            {busy ? <ActivityIndicator color={palette.navy} /> : <Txt v="bodyStrong" color={palette.navy}>Check my location & show QR</Txt>}
+            {busy ? <ActivityIndicator color={palette.onCyan} /> : <Txt v="bodyStrong" color={palette.onCyan}>Check my location & show QR</Txt>}
           </Pressable>
         )}
         {error && (
@@ -662,11 +743,13 @@ const styles = themed(() => ({
   reactSummary: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 10, marginBottom: 4 },
   actions: { marginTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.hairline, paddingTop: 6 },
   action: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 6, borderRadius: 12 },
-  holdBtn: { marginTop: 10, height: 60, borderRadius: radius.pill, backgroundColor: palette.sosHold, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  holdFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: palette.red, transformOrigin: 'left' },
+  holdBtn: { height: 60, borderRadius: radius.pill, backgroundColor: palette.red, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  holdRing: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderRadius: radius.pill, borderWidth: 2, borderColor: palette.red },
+  holdFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#7A1018', transformOrigin: 'left' },
   sosIconOk: { width: 52, height: 52, borderRadius: 16, backgroundColor: palette.greenSoft, alignItems: 'center', justifyContent: 'center' },
   callBtn: { flex: 1, flexDirection: 'row', gap: 8, height: 46, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: palette.hairlineStrong },
   callLabel: { marginTop: 18, marginBottom: 8, letterSpacing: 1 },
+  familyBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, padding: 12, borderRadius: radius.card - 4, borderWidth: 1, borderColor: palette.hairline, backgroundColor: palette.surfaceSunk },
   callGrid: { flexDirection: 'row', gap: 8 },
   callTile: { flex: 1, alignItems: 'center', gap: 2, paddingVertical: 12, borderRadius: radius.card, borderWidth: 1, backgroundColor: palette.redSoft },
   shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 32, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: palette.surfaceSunk },
@@ -674,10 +757,11 @@ const styles = themed(() => ({
   step: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: palette.hairlineStrong },
   primary: { height: 52, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
   result: { marginTop: 18, padding: 18, alignItems: 'center', gap: 6, borderRadius: radius.card, backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairline },
+  tripHead: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
+  gear: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairlineStrong },
   tripRows: { marginTop: 14, gap: 12 },
   quote: { marginTop: 10, padding: 10, borderRadius: radius.chip, backgroundColor: palette.surfaceSunk, borderLeftWidth: 3, borderLeftColor: palette.redBorder },
   tripRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 16 },
-  appearance: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 },
   confirmRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
   genderRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
   countPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 36, borderRadius: radius.pill, backgroundColor: palette.surfaceSunk, borderWidth: 1, borderColor: palette.hairline },
@@ -842,10 +926,13 @@ export const GamesSheet = forwardRef<Ref, { onClose: () => void; onOpenArrivalGa
     (m.payload.kind === 'QUIZ' && m.payload.correct == null && now < Date.parse(m.payload.revealAt)) ||
     (m.payload.kind === 'EMOJI' && !m.payload.solvedBy && now < Date.parse(m.payload.expiresAt))));
 
-  const start = (kind: GameKind) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); chatSocket.startGame(roomType, kind); onClose(); };
+  const start = (kind: GameKind, opts: { pick?: number } = {}) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); chatSocket.startGame(roomType, kind, opts); setRpsOpen(false); onClose(); };
+  const [rpsOpen, setRpsOpen] = useState(false);
   const games: { key: string; emoji: string; title: string; desc: string; tag: string; onPress?: () => void; disabled?: boolean }[] = [
     { key: 'QUIZ', emoji: '🧠', title: 'Bus Quiz', desc: 'One question for everyone. 25 seconds. Fastest right answer wins.', tag: live ? 'A round is live' : 'Everyone', onPress: () => start('QUIZ'), disabled: live },
     { key: 'EMOJI', emoji: '🎬', title: 'Guess the Movie', desc: 'A Bollywood film in emojis. Type your guess in the chat.', tag: live ? 'A round is live' : 'Everyone', onPress: () => start('EMOJI'), disabled: live },
+    { key: 'SNL', emoji: '🎲', title: 'Snakes & Ladders', desc: 'Up to 4 players. Climb ladders, dodge snakes, first to 100 wins.', tag: '2–4 players', onPress: () => start('SNL') },
+    { key: 'RPS', emoji: '✊', title: 'Rock Paper Scissors', desc: 'Lock in your pick secretly. First person to answer plays you.', tag: '1 vs 1', onPress: () => setRpsOpen((o) => !o) },
     { key: 'TTT', emoji: '❌⭕', title: 'Tic-tac-toe', desc: 'Challenge the bus. First to accept plays you, others watch.', tag: '1 vs 1', onPress: () => start('TTT') },
   ];
   if (eta) games.push({
@@ -862,7 +949,8 @@ export const GamesSheet = forwardRef<Ref, { onClose: () => void; onOpenArrivalGa
           <Txt v="small" color={palette.textSecondary} style={{ marginTop: 4 }}>{`Games start in ${roomTheme[roomType].name}. Quick, quiet and first-names only.`}</Txt>
         </View>
         {games.map((g) => (
-          <Pressable key={g.key} onPress={g.onPress} disabled={g.disabled}
+          <React.Fragment key={g.key}>
+          <Pressable onPress={g.onPress} disabled={g.disabled}
             style={({ pressed }) => [styles.locOption, g.disabled && { opacity: 0.5 }, pressed && { backgroundColor: palette.surfaceRaised }]}
             accessibilityRole="button" accessibilityState={{ disabled: !!g.disabled }} accessibilityLabel={`${g.title}. ${g.desc}`}>
             <View style={[styles.locIcon, { backgroundColor: palette.surfaceRaised }]}><Txt style={{ fontSize: 22, lineHeight: 28 }}>{g.emoji}</Txt></View>
@@ -873,8 +961,20 @@ export const GamesSheet = forwardRef<Ref, { onClose: () => void; onOpenArrivalGa
               </View>
               <Txt v="meta" color={palette.textSecondary}>{g.desc}</Txt>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={palette.textTertiary} />
+            <Ionicons name={g.key === 'RPS' && rpsOpen ? 'chevron-down' : 'chevron-forward'} size={18} color={palette.textTertiary} />
           </Pressable>
+          {g.key === 'RPS' && rpsOpen && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: -2 }}>
+              {RPS_PICKS.map((e, i) => (
+                <Pressable key={i} onPress={() => start('RPS', { pick: i })} accessibilityRole="button" accessibilityLabel={`Challenge with ${RPS_NAMES[i]}`}
+                  style={({ pressed }) => [styles.locOption, { flex: 1, flexDirection: 'column', gap: 2, paddingVertical: 10 }, pressed && { backgroundColor: palette.surfaceRaised }]}>
+                  <Txt style={{ fontSize: 26, lineHeight: 32 }}>{e}</Txt>
+                  <Txt v="micro" color={palette.textSecondary}>{RPS_NAMES[i]}</Txt>
+                </Pressable>
+              ))}
+            </View>
+          )}
+          </React.Fragment>
         ))}
       </BottomSheetScrollView>
     </Sheet>

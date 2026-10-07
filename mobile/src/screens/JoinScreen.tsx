@@ -1,22 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons } from '../components/icons';
+import * as Haptics from '../services/haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { Txt } from '../components/Txt';
 import { ThemeSwitch } from '../components/ThemeSwitch';
-import { ProfileStep } from '../components/ProfileStep';
 
 import { ToastHost, toast } from '../components/Toast';
 import { currentCoords, LocationError } from '../services/location';
-import { loadProfile, saveProfile } from '../services/prefs';
 import type { JoinResponse } from '../shared/protocol';
 import { api, ApiError } from '../services/api';
 import { getDeviceId, saveSession } from '../services/session';
 import { useChat } from '../store/chatStore';
 import { clock } from '../utils/format';
+import { LockedScreen } from './LockedScreen';
+import type { TripLock } from '../services/host';
 import { font, palette, radius, themed } from '../theme/tokens';
 
 /**
@@ -37,50 +37,39 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
   const [pnr, setPnr] = useState('');
   const [seat, setSeat] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ code: string; message: string; opensAt?: string } | null>(null);
+  const [error, setError] = useState<{ code: string; message: string; lock?: TripLock } | null>(null);
   // Placeholders are deliberately faint: a bright example PNR reads as "already filled in".
   const [demo, setDemo] = useState<{ pnr: string; label: string; seats: string[] }[]>([]);
 
-  // Steps: ticket (PNR + seat) → profile (name + avatar) → join. A scanned QR opens straight on the profile step.
-  const [step, setStep] = useState<'ticket' | 'profile'>('ticket');
-  const [pending, setPending] = useState<{ kind: 'pnr'; pnr: string; seat: string } | { kind: 'qr'; token: string } | null>(null);
-  const [savedProfile, setSavedProfile] = useState<{ name: string; avatar: string | null } | null>(null);
-  useEffect(() => { loadProfile().then(setSavedProfile); }, []);
+  // Nobody types a name: the server hands out a random trip name + avatar ("Snoring Hulk").
+  // PNR + seat joins straight away; a scanned QR waits for one tap (the location prompt needs it).
+  const [qrToken, setQrToken] = useState<string | null>(null);
 
-  const enter = async (res: JoinResponse, profile: { name: string; avatar: string | null }) => {
+  const enter = async (res: JoinResponse) => {
     await saveSession(res);
-    await saveProfile(profile);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     useChat.getState().reset();
     useChat.getState().setSession(res);
+    toast(`You’re travelling as ${res.me.name} 🎭`, 'info');
   };
   const fail = (e: unknown) => {
     const err = e as ApiError;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    setError({ code: err.code, message: err.message, opensAt: err.meta?.opensAt });
+    setError({ code: err.code, message: err.message, lock: err.meta?.opensAt ? (err.meta as TripLock) : undefined });
   };
 
-  /** Ticket step → profile step (nothing is sent until the profile is set). */
-  const next = useCallback((p = pnr, s = seat) => {
-    if (!p.trim() || !s.trim()) { setError({ code: 'INVALID', message: 'Enter the PNR and seat number from your ticket.' }); return; }
-    setError(null);
-    setPending({ kind: 'pnr', pnr: p.trim(), seat: s.trim() });
-    setStep('profile');
-  }, [pnr, seat]);
-
-  const join = async (profile: { name: string; avatar: string | null }) => {
-    if (!pending) return;
+  const join = async (pending: { kind: 'pnr'; pnr: string; seat: string } | { kind: 'qr'; token: string }) => {
     setBusy(true);
     setError(null);
     try {
       if (pending.kind === 'pnr') {
-        await enter(await api.join({ pnr: pending.pnr, seat: pending.seat, deviceId: await getDeviceId(), profile }), profile);
+        await enter(await api.join({ pnr: pending.pnr, seat: pending.seat, deviceId: await getDeviceId() }));
       } else {
         // Phone browsers block location on plain-http pages; send null and let the server decide (demo skips, production asks again).
         const coords = await currentCoords().catch(() => null);
-        const res = await api.joinQr({ token: pending.token, deviceId: await getDeviceId(), coords, profile });
+        const res = await api.joinQr({ token: pending.token, deviceId: await getDeviceId(), coords });
         if (res.qrCheck.skipped) toast(`Demo: location check skipped${res.qrCheck.busKm != null ? ` (you’re ${res.qrCheck.busKm} km from the bus)` : ''}`, 'info');
-        await enter(res, profile);
+        await enter(res);
       }
     } catch (e) {
       if (e instanceof LocationError) setError({ code: 'LOCATION', message: e.message });
@@ -90,12 +79,18 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
     }
   };
 
+  /** PNR + seat → join (no name step). */
+  const next = useCallback((p = pnr, s = seat) => {
+    if (!p.trim() || !s.trim()) { setError({ code: 'INVALID', message: 'Enter the PNR and seat number from your ticket.' }); return; }
+    void join({ kind: 'pnr', pnr: p.trim(), seat: s.trim() });
+  }, [pnr, seat]);
+
   // Deep links: abhibus-chat://join?pnr=AB7X2K9Q&seat=12L · abhibus-chat://qr?t=<invite> · web: /?qr=<invite>
   useEffect(() => {
     const handle = (url: string | null) => {
       if (!url) return;
       const token = tokenFromInvite(url);
-      if (token) { setPending({ kind: 'qr', token }); setStep('profile'); return; }
+      if (token) { setQrToken(token); return; }
       const q = url.split('?')[1] ?? '';
       const params = Object.fromEntries(q.split('&').map((kv) => kv.split('=').map(decodeURIComponent)));
       if (params.pnr && params.seat) { setPnr(params.pnr); setSeat(params.seat); next(params.pnr, params.seat); }
@@ -108,6 +103,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
   useEffect(() => { api.demoTickets().then((r) => setDemo(r.tickets)).catch(() => {}); }, []);
 
   const notLive = error?.code === 'TRIP_NOT_LIVE';
+  if (notLive && error.lock) return <LockedScreen lock={error.lock} onBack={() => setError(null)} />;
 
   return (
     <KeyboardAwareScrollView style={{ flex: 1, backgroundColor: palette.navy }} contentContainerStyle={[styles.page, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}
@@ -117,11 +113,26 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
         <ThemeSwitch compact />
       </Animated.View>
 
-      {step === 'profile' && pending ? (
-        <ProfileStep initial={savedProfile} busy={busy} error={error?.message ?? null}
-          cta={pending.kind === 'qr' ? 'Check location & join' : 'Join trip chat'}
-          note={pending.kind === 'qr' ? 'We’ll ask for your location once, to confirm you’re with this bus.' : 'Chat opens when your bus departs and is deleted 2 hours after arrival.'}
-          onBack={() => { setStep('ticket'); setError(null); }} onSubmit={join} />
+      {qrToken ? (
+        <Animated.View entering={FadeInDown.duration(400)} style={{ gap: 10, marginTop: 28 }}>
+          <Txt v="h1">Hop on with a QR 🎟️</Txt>
+          <Txt v="body" color={palette.textSecondary}>
+            You’ll get a random trip name like “Snoring Hulk” or “Window Seat Baburao”. We’ll ask for your location once, to confirm you’re with this bus.
+          </Txt>
+          {error && (
+            <View style={styles.error} accessibilityLiveRegion="assertive">
+              <Ionicons name="alert-circle-outline" size={18} color={palette.red} />
+              <Txt v="small" style={{ flex: 1 }}>{error.message}</Txt>
+            </View>
+          )}
+          <Pressable onPress={() => join({ kind: 'qr', token: qrToken })} disabled={busy} style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }, busy && { opacity: 0.7 }]}
+            accessibilityRole="button">
+            {busy ? <ActivityIndicator color={palette.onCyan} /> : <Txt v="bodyStrong" color={palette.onCyan}>Check location & join</Txt>}
+          </Pressable>
+          <Pressable onPress={() => { setQrToken(null); setError(null); }} style={{ alignSelf: 'center', padding: 10 }} accessibilityRole="button">
+            <Txt v="smallStrong" color={palette.textSecondary}>I have an AbhiBus ticket</Txt>
+          </Pressable>
+        </Animated.View>
       ) : (<>
       {live && onResume && (
         <Animated.View entering={FadeInDown.duration(300)}>
@@ -141,7 +152,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
       <Animated.View entering={FadeInDown.delay(80).duration(500)} style={{ gap: 10, marginTop: 28 }}>
         <Txt v="h1">Your bus has a chat tonight</Txt>
         <Txt v="body" color={palette.textSecondary}>
-          Talk to the people on your bus, see stop timers from the conductor and know where the bus is. You’ll show up by your first name and avatar.
+          Talk to the people on your bus, see stop timers and know where the bus is. You’ll get a random trip name like “Snoring Hulk” or “Chai Loving Jack Sparrow”, so nobody sees your real name.
         </Txt>
       </Animated.View>
 
@@ -166,14 +177,14 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
         <Animated.View entering={FadeIn.duration(200)} style={[styles.error, notLive && { backgroundColor: palette.amberSoft, borderColor: palette.amberBorder }]} accessibilityLiveRegion="assertive">
           <Ionicons name={notLive ? 'time-outline' : 'alert-circle-outline'} size={18} color={notLive ? palette.amber : palette.red} />
           <Txt v="small" style={{ flex: 1 }}>
-            {notLive && error.opensAt ? `Trip chat opens at ${clock(error.opensAt)}, 30 minutes before your bus departs.` : error.message}
+            {notLive && error.lock ? `Trip chat opens at ${clock(error.lock.opensAt)}.` : error.message}
           </Txt>
         </Animated.View>
       )}
 
       <Pressable onPress={() => next()} disabled={busy} style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }, busy && { opacity: 0.7 }]}
-        accessibilityRole="button" accessibilityLabel="Continue">
-        {busy ? <ActivityIndicator color={palette.navy} /> : <Txt v="bodyStrong" color={palette.navy}>Continue</Txt>}
+        accessibilityRole="button" accessibilityLabel="Join trip chat">
+        {busy ? <ActivityIndicator color={palette.onCyan} /> : <Txt v="bodyStrong" color={palette.onCyan}>Join trip chat</Txt>}
       </Pressable>
 
       {/* Guests (booked on RedBus etc.) don't type anything: they scan a passenger's QR with the phone camera. */}
@@ -186,7 +197,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
       </View>
 
       <Txt v="meta" color={palette.textTertiary} style={{ textAlign: 'center', marginTop: 12 }}>
-        Chat opens when your bus departs and is deleted 2 hours after arrival.
+        Chat opens before the first passenger boards and is deleted 3 hours after the last drop.
       </Txt>
 
       {demo.length > 0 && (

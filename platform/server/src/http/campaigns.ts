@@ -8,6 +8,7 @@ import { newId } from '../lib/ids';
 import { emitEvent } from '../core/events';
 import { audit } from '../core/audit';
 import { FORMAT_LABEL } from '../core/ads';
+import { strs } from '../lib/json';
 
 export const CampaignZ = z.object({
   name: z.string().min(1).max(80),
@@ -59,7 +60,7 @@ export const campaignDto = (c: Campaign) => ({
 
 export async function campaignStats(id: string, allowedTenants: string[] | null) {
   const c = await prisma.campaign.findUnique({ where: { id } });
-  if (!c || (allowedTenants && c.tenantIds.length && !c.tenantIds.some((t) => allowedTenants.includes(t)))) throw new ApiError('not_found', 'Campaign not found.');
+  if (!c || (allowedTenants && strs(c.tenantIds).length && !strs(c.tenantIds).some((t) => allowedTenants.includes(t)))) throw new ApiError('not_found', 'Campaign not found.');
   const held = await prisma.campaignDelivery.groupBy({ by: ['reason'], where: { campaignId: id, ok: false }, _count: true });
   const delivered = await prisma.campaignDelivery.count({ where: { campaignId: id, ok: true } });
   let results: unknown = null;

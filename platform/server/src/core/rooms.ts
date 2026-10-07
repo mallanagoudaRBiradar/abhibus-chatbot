@@ -7,6 +7,7 @@ import { newId } from '../lib/ids';
 import { getTenant, roomFeatures } from './tenants';
 import { emitEvent } from './events';
 import type { JourneyInfo, Vertical } from '../shared/protocol';
+import { strs } from '../lib/json';
 
 // ------------------------------------------------------------------ input --
 export const StopZ = z.object({
@@ -104,7 +105,7 @@ export const fmtTime = (d: Date | null) => {
  */
 export async function upsertRoom(tenantId: string, tripKey: string, input: RoomUpsert, actor: string) {
   const { t, cfg } = await getTenant(tenantId);
-  if (!t.verticals.includes(input.vertical as DbVertical) && input.vertical !== 'custom')
+  if (!strs(t.verticals).includes(input.vertical as DbVertical) && input.vertical !== 'custom')
     throw new ApiError('invalid_request', `Tenant ${tenantId} isn’t set up for ${input.vertical} rooms.`);
   const departs = new Date(input.schedule.departs_at), arrives = new Date(input.schedule.arrives_at);
   if (+arrives <= +departs) throw new ApiError('invalid_request', 'schedule.arrives_at must be after departs_at.');

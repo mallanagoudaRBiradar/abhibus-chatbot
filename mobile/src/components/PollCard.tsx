@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react';
 import { Pressable, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons, MaterialCommunityIcons } from './icons';
+import * as Haptics from '../services/haptics';
 import { Txt } from './Txt';
 import { palette, themed } from '../theme/tokens';
 import { pollVotes, type PollPayload } from '../shared/protocol';
@@ -56,7 +56,7 @@ export function PollCard({ poll, reactions, mySeat, accent, pending, onVote, onO
             accessibilityRole={poll.multi ? 'checkbox' : 'radio'} accessibilityState={{ checked: on }}
             accessibilityLabel={`${opt}. ${n} vote${n === 1 ? '' : 's'}`}>
             <View style={[styles.mark, poll.multi && { borderRadius: 6 }, on && { backgroundColor: accent, borderColor: accent }]}>
-              {on && <Ionicons name="checkmark" size={13} color={palette.navyDeep} />}
+              {on && <Ionicons name="checkmark" size={13} color={palette.onCyan} />}
             </View>
             <View style={{ flex: 1, gap: 6 }}>
               <View style={styles.optRow}>

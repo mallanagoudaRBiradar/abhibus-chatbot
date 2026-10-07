@@ -2,7 +2,9 @@ import type { Server } from 'socket.io';
 import type { Message, MessageReaction, Prisma, ReadReceipt, RoomType as DbRoomType } from '@prisma/client';
 import { publicGame } from '../features/gamesView';
 import { prisma } from '../db/prisma';
+import { retryOnConflict } from '../db/retry';
 import { logger } from '../lib/logger';
+import { metrics } from '../lib/metrics';
 import { seatSort } from '../lib/util';
 import {
   S2C, roomKey, seatKey,
@@ -24,7 +26,10 @@ import {
  */
 type MsgWithRel = Message & { receipts?: Pick<ReadReceipt, 'seatNumber'>[]; reactions?: Pick<MessageReaction, 'seatNumber' | 'emoji'>[] };
 
-export type Profile = { name: string; avatar: string | null; guest: boolean };
+/** `boardAt` = their boarding time (ms); past it they show as "On board". QR guests scanned on the bus, so they're on board. */
+export type Profile = { name: string; avatar: string | null; guest: boolean; boardAt?: number | null };
+const ms = (d: Date | null | undefined) => (d ? d.getTime() : null);
+export const onBoard = (p: Profile | undefined) => !!p && (p.guest || (p.boardAt != null && p.boardAt <= Date.now()));
 /** seat_mute.reason for passengers removed after reports from more than half the room. */
 export const REMOVED_REASON = 'REMOVED_BY_MAJORITY_REPORTS';
 
@@ -43,29 +48,59 @@ export class RealtimeHub {
   // ------------------------------------------------------------ profiles ---
   /** jid:seat -> display profile. Warmed from passenger_booking; crowd seats are set by the simulator. */
   private profiles = new Map<string, Profile>();
-  setProfile(journeyId: string, seat: string, p: Profile) { this.profiles.set(`${journeyId}:${seat}`, p); }
+  setProfile(journeyId: string, seat: string, p: Profile) { this.touch(journeyId); this.profiles.set(`${journeyId}:${seat}`, p); }
   profileOf(journeyId: string, seat: string): Profile | undefined { return this.profiles.get(`${journeyId}:${seat}`); }
   /** Display name for system lines ("Rahul beat Priya…"); falls back to the seat. */
   nameOf(journeyId: string, seat: string | null | undefined) { return (seat && this.profileOf(journeyId, seat)?.name) || (seat ? handleForSeat(seat) : 'Someone'); }
   async warmProfiles(journeyId: string) {
-    const rows = await prisma.passengerBooking.findMany({ where: { journeyId, deviceId: { not: null } }, select: { seatNumber: true, displayName: true, avatarId: true, channel: true } });
-    for (const r of rows) if (r.displayName) this.setProfile(journeyId, r.seatNumber, { name: r.displayName, avatar: r.avatarId, guest: r.channel === 'QR' });
+    const rows = await prisma.passengerBooking.findMany({ where: { journeyId, deviceId: { not: null } }, select: { seatNumber: true, displayName: true, avatarId: true, channel: true, boardingAt: true } });
+    for (const r of rows) if (r.displayName) this.setProfile(journeyId, r.seatNumber, { name: r.displayName, avatar: r.avatarId, guest: r.channel === 'QR', boardAt: ms(r.boardingAt) });
   }
   /** Listeners for passenger messages (used by the demo simulator). */
   onPassengerMessage: ((journeyId: string, msg: ChatMessage) => void)[] = [];
 
-  attach(io: Server) { this.io = io; }
+  attach(io: Server) {
+    this.io = io;
+    setInterval(() => this.prune(), 10 * 60_000).unref();
+  }
+
+  // ------------------------------------------------------- local caches ---
+  /**
+   * roomIds / roomJourney / profiles are per-instance caches. Every instance
+   * prunes journeys it hasn't touched for IDLE_MS, so memory stays flat over
+   * days of 2,000 journeys a day (the purge itself only runs on the leader).
+   */
+  private lastUsed = new Map<string, number>();
+  private static IDLE_MS = 6 * 3600_000;
+  private touch(journeyId: string) { this.lastUsed.set(journeyId, Date.now()); }
+  forgetJourney(journeyId: string) {
+    this.lastUsed.delete(journeyId);
+    for (const rt of ['MAIN_COMMON', 'WOMEN_ONLY'] as RoomType[]) {
+      const key = roomKey(journeyId, rt);
+      const id = this.roomIds.get(key);
+      if (id) this.roomJourney.delete(id);
+      this.roomIds.delete(key);
+    }
+    for (const k of this.profiles.keys()) if (k.startsWith(`${journeyId}:`) && !k.slice(journeyId.length + 1).includes(':')) this.profiles.delete(k);
+  }
+  private prune() {
+    const cutoff = Date.now() - RealtimeHub.IDLE_MS;
+    for (const [jid, at] of this.lastUsed) if (at < cutoff) this.forgetJourney(jid);
+  }
+  /** Sizes for /metrics. */
+  cacheSizes() { return { journeys: this.lastUsed.size, rooms: this.roomIds.size, profiles: this.profiles.size }; }
 
   // ------------------------------------------------------------- rooms ----
   async roomId(journeyId: string, roomType: RoomType): Promise<string> {
     const key = roomKey(journeyId, roomType);
+    this.touch(journeyId);
     const cached = this.roomIds.get(key);
     if (cached) return cached;
-    const room = await prisma.chatRoom.upsert({
+    const room = await retryOnConflict(() => prisma.chatRoom.upsert({
       where: { journeyId_roomType: { journeyId, roomType: roomType as DbRoomType } },
       create: { journeyId, roomType: roomType as DbRoomType },
       update: {},
-    });
+    }));
     this.roomIds.set(key, room.roomId);
     this.roomJourney.set(room.roomId, journeyId);
     return room.roomId;
@@ -91,7 +126,7 @@ export class RealtimeHub {
       id: m.messageId, roomType, senderSeat: m.senderSeat, senderHandle: m.senderHandle,
       contentType: game ? 'GAME' : poll ? 'POLL' : (m.contentType as ContentType),
       payload: game ? publicGame(game) : poll ?? m.payload, createdAt: m.createdAt.toISOString(),
-      senderAvatar: prof?.avatar ?? null, senderGuest: prof?.guest ?? false,
+      senderAvatar: prof?.avatar ?? null, senderGuest: prof?.guest ?? false, senderOnBoard: onBoard(prof),
       clientMsgId: m.clientMsgId, seenBy: (m.receipts ?? []).map((r) => r.seatNumber).sort(seatSort), reactions,
     };
   }
@@ -136,6 +171,7 @@ export class RealtimeHub {
       throw e;
     }
     const dto = this.toDto(row, roomType);
+    metrics.inc('messages_total');
     if (data.visibleToSeat) { this.io.to(seatKey(journeyId, data.visibleToSeat)).emit(S2C.MSG_NEW, dto); return dto; } // private: that seat only
     this.io.to(roomKey(journeyId, roomType)).emit(S2C.MSG_NEW, dto);
     if (dto.senderSeat) for (const l of this.onPassengerMessage) l(journeyId, dto);
@@ -181,19 +217,21 @@ export class RealtimeHub {
     const onlineSeats = [...seats].sort(seatSort);
 
     // Members = everyone who has joined this room (women room: F bookings only), minus people removed by reports.
+    // Anyone connected right now counts too, even if support released their seat binding meanwhile
+    // (otherwise "1 online" sits next to "0 in chat").
     const [rows, removed] = await Promise.all([
       prisma.passengerBooking.findMany({
-        where: { journeyId, deviceId: { not: null }, ...(roomType === 'WOMEN_ONLY' ? { gender: 'F' as const } : {}) },
-        select: { seatNumber: true, gender: true, displayName: true, avatarId: true, channel: true, invitedBy: true },
+        where: { journeyId, OR: [{ deviceId: { not: null } }, { seatNumber: { in: onlineSeats } }], ...(roomType === 'WOMEN_ONLY' ? { gender: 'F' as const } : {}) },
+        select: { seatNumber: true, gender: true, displayName: true, avatarId: true, channel: true, invitedBy: true, boardingAt: true },
       }),
       prisma.seatMute.findMany({ where: { journeyId, reason: REMOVED_REASON }, select: { seatNumber: true } }),
     ]);
     const gone = new Set(removed.map((r) => r.seatNumber));
     const people = [
       ...rows.filter((r) => !gone.has(r.seatNumber)).map((r) => {
-        const p = { name: r.displayName ?? handleForSeat(r.seatNumber), avatar: r.avatarId, guest: r.channel === 'QR' };
+        const p = { name: r.displayName ?? handleForSeat(r.seatNumber), avatar: r.avatarId, guest: r.channel === 'QR', boardAt: ms(r.boardingAt) };
         if (r.displayName) this.setProfile(journeyId, r.seatNumber, p);
-        return { seat: r.seatNumber, gender: r.gender, ...p, invitedBy: r.invitedBy ? this.nameOf(journeyId, r.invitedBy) : null };
+        return { seat: r.seatNumber, gender: r.gender, ...p, onBoard: onBoard(p), invitedBy: r.invitedBy ? this.nameOf(journeyId, r.invitedBy) : null };
       }),
       ...this.virtualMembers(journeyId, roomType).filter((v) => !gone.has(v.seat)),
     ];
@@ -248,8 +286,8 @@ export class RealtimeHub {
       const key = roomKey(journeyId, rt);
       this.io.to(key).emit(S2C.JOURNEY_CLOSED, {});
       this.io.in(key).disconnectSockets(true);
-      this.roomIds.delete(key);
     }
+    this.forgetJourney(journeyId);
   }
 }
 

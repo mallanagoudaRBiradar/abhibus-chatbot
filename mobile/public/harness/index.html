@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Trip Chat · WebView test harness</title>
+  <link rel="stylesheet" href="/harness/harness.css" />
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>WebView test harness</h1>
+      <p class="hint">Plays the AbhiBus app: mints a chat session, injects it, and answers the bridge exactly as the iOS / Android app should. <strong>Staging only</strong>: it holds a partner API key in this tab.</p>
+
+      <fieldset>
+        <legend>1. Session</legend>
+        <label>Chat API URL <input id="api" placeholder="http://localhost:4000" /></label>
+        <label>Partner API key (x-api-key) <input id="key" type="password" autocomplete="off" /></label>
+        <div class="row">
+          <label>PNR <input id="pnr" placeholder="AB7X2K9Q" /></label>
+          <label>Seat <input id="seat" placeholder="12L" /></label>
+        </div>
+        <div class="row">
+          <label>First name <input id="name" value="Asha" /></label>
+          <label>Device ID <input id="device" /></label>
+        </div>
+        <details>
+          <summary>…or paste a chat-sessions response</summary>
+          <textarea id="pasted" rows="4" placeholder='{"token":"…","me":{…},"journey":{…}}'></textarea>
+        </details>
+      </fieldset>
+
+      <fieldset>
+        <legend>2. What the app supports</legend>
+        <div class="row">
+          <label>Platform <select id="platform"><option>android</option><option>ios</option></select></label>
+          <label>Theme <select id="theme"><option>dark</option><option>light</option></select></label>
+        </div>
+        <div class="caps">
+          <label><input type="checkbox" value="call" checked /> call</label>
+          <label><input type="checkbox" value="openExternal" checked /> openExternal</label>
+          <label><input type="checkbox" value="location" checked /> location</label>
+          <label><input type="checkbox" value="voice" checked /> voice</label>
+          <label><input type="checkbox" value="haptics" checked /> haptics</label>
+        </div>
+        <div class="row">
+          <label>Fake GPS <input id="gps" value="17.4375, 78.4483" /></label>
+          <label class="inline"><input type="checkbox" id="denyLoc" /> deny location</label>
+        </div>
+        <label class="inline"><input type="checkbox" id="autoRenew" checked /> answer <code>sessionExpired</code> with a fresh session</label>
+      </fieldset>
+
+      <div class="actions">
+        <button id="open" class="primary">Open trip chat</button>
+      </div>
+
+      <fieldset>
+        <legend>3. App → chat</legend>
+        <div class="actions">
+          <button data-send="back">Android back</button>
+          <button data-send="theme-dark">Theme dark</button>
+          <button data-send="theme-light">Theme light</button>
+          <button data-send="bg">App to background</button>
+          <button data-send="fg">App to foreground</button>
+          <button data-send="session">Send fresh session</button>
+        </div>
+      </fieldset>
+
+      <h2>Bridge log</h2>
+      <ol id="log"></ol>
+    </section>
+
+    <section class="phone">
+      <div class="frame">
+        <div id="placeholder">Open a trip chat to load it here</div>
+        <iframe id="chat" title="Trip chat" hidden></iframe>
+      </div>
+    </section>
+  </main>
+  <script src="/config.js"></script>
+  <script src="/harness/harness.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, useWindowDimensions } from 'react-native';
 import { BottomSheetBackdrop, BottomSheetModal, BottomSheetView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { palette, radius, themed } from '../theme/tokens';
@@ -8,6 +8,9 @@ import { palette, radius, themed } from '../theme/tokens';
 export const Sheet = forwardRef<BottomSheetModal, { children: React.ReactNode; onDismiss?: () => void; scrollable?: boolean }>(
   ({ children, onDismiss, scrollable }, ref) => {
     const insets = useSafeAreaInsets();
+    const { height } = useWindowDimensions();
+    // Never taller than the screen (iPhone SE is 667 pt): leave the header peeking out above the sheet.
+    const maxHeight = Math.min(640, height - insets.top - 72);
     const backdrop = useCallback((p: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop {...p} appearsOnIndex={0} disappearsOnIndex={-1} opacity={0.55} pressBehavior="close" />
     ), []);
@@ -15,7 +18,7 @@ export const Sheet = forwardRef<BottomSheetModal, { children: React.ReactNode; o
       <BottomSheetModal
         ref={ref}
         enableDynamicSizing
-        maxDynamicContentSize={640}
+        maxDynamicContentSize={maxHeight}
         onDismiss={onDismiss}
         backdropComponent={backdrop}
         backgroundStyle={styles.bg}

@@ -9,7 +9,9 @@ import { hintFor } from './gameBank';
 export type StoredGame =
   | { kind: 'QUIZ'; category: string; question: string; options: string[]; revealAt: string; correct: number }
   | { kind: 'EMOJI'; category: string; emojis: string; title: string; answers: string[]; hintAt: string; expiresAt: string; solvedBy: string | null; solvedAt: string | null }
-  | { kind: 'TTT'; challenger: string; expiresAt: string };
+  | { kind: 'TTT'; challenger: string; expiresAt: string }
+  | { kind: 'SNL'; challenger: string; expiresAt: string }
+  | { kind: 'RPS'; challenger: string; expiresAt: string; pick: number; opponent: string | null; opponentPick: number | null };
 
 export function publicGame(g: StoredGame, now = Date.now()): GamePayload {
   switch (g.kind) {
@@ -25,5 +27,9 @@ export function publicGame(g: StoredGame, now = Date.now()): GamePayload {
     }
     case 'TTT':
       return { kind: 'TTT', challenger: g.challenger, expiresAt: g.expiresAt };
+    case 'SNL':
+      return { kind: 'SNL', challenger: g.challenger, expiresAt: g.expiresAt };
+    case 'RPS': // the challenger's pick is secret until someone answers
+      return { kind: 'RPS', challenger: g.challenger, expiresAt: g.expiresAt, opponent: g.opponent, challengerPick: g.opponent ? g.pick : null, opponentPick: g.opponentPick };
   }
 }

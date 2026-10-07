@@ -171,6 +171,11 @@ export const platformBridge = {
     }
   },
 
+  /** A journey's room just opened: create / link its console room now, not on the first message. */
+  link(journeyId: string) { enqueue(journeyId, 'link journey', async () => { await roomFor(journeyId); }); },
+  /** A passenger joined the chat: show them in the console's member list right away. */
+  addMember(journeyId: string, seat: string) { enqueue(journeyId, 'add member', async () => { await memberFor(journeyId, seat); }); },
+
   /** Vote in a console poll shown in the app. Records the seat's vote here too, so the card remembers it. */
   async vote(journeyId: string, seat: string, appMessageId: string, option: number) {
     const msg = await prisma.message.findUniqueOrThrow({ where: { messageId: appMessageId }, include: { room: true } });
@@ -244,7 +249,7 @@ export const platformBridge = {
       if (!j) return { status: 200, body: { ignored: 'room not linked to a journey' } };
       const to = e.type === 'room.deleted' ? 'deleted' : e.data.to;
       if (to === 'read_only') {
-        const purgeAt = new Date(Date.now() + config.PURGE_AFTER_ARRIVAL_MIN * 60_000);
+        const purgeAt = new Date(Date.now() + config.CHAT_CLOSE_AFTER_LAST_DROP_MIN * 60_000);
         await prisma.busJourney.update({ where: { journeyId: j.journeyId }, data: { status: 'ARRIVED', actualEndTime: new Date(), purgeAt } });
         await hub.broadcastToJourney(j.journeyId, 'SYSTEM', { text: 'AbhiBus has ended this trip chat. You can still read it until it’s deleted.' }, 'AbhiBus');
         hub.emitToJourney(j.journeyId, S2C.JOURNEY_ENDING, { purgeAt: purgeAt.toISOString() });
@@ -315,6 +320,12 @@ async function renderInApp(journeyId: string, d: { message_id: string; content_t
 
 /** Link every active trip to its room, so Console posts reach it even before any passenger speaks. */
 async function linkActiveJourneys() {
+  // A console room can disappear (console database reset or moved): forget it and link again.
+  const linked = await prisma.busJourney.findMany({ where: { status: { in: ['SCHEDULED', 'IN_TRANSIT'] }, platformRoomId: { not: null } }, select: { journeyId: true, platformRoomId: true } });
+  for (const j of linked) {
+    const gone = await api('GET', `/v1/rooms/${j.platformRoomId}`).then(() => false, (err) => err instanceof BridgeError && err.status === 404);
+    if (gone) { await prisma.busJourney.update({ where: { journeyId: j.journeyId }, data: { platformRoomId: null } }); roomByJourney.delete(j.journeyId); logger.info({ journeyId: j.journeyId }, 'console room no longer exists, relinking'); }
+  }
   const active = await prisma.busJourney.findMany({ where: { status: { in: ['SCHEDULED', 'IN_TRANSIT'] }, platformRoomId: null } });
   for (const j of active) await roomFor(j.journeyId).catch((err) => logger.warn({ journeyId: j.journeyId, err: (err as Error).message }, 'platform bridge: link failed'));
 }

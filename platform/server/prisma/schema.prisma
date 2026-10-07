@@ -1,6 +1,9 @@
 // =============================================================================
 //  Trip Rooms platform — multi-tenant schema
 // =============================================================================
+//  Lives in the shared AbhiBus database (abrs_new): every table is prefixed
+//  chat_console_ (the journey-chat tables are chat_*).
+//
 //  Tenants (AbhiBus, ConfirmTkt, ixigo Trains, ixigo Flights, …) push their
 //  trips and travellers here through the API. The platform never reads a
 //  tenant's own database. Everything a traveller writes is deleted at purge_at.
@@ -11,7 +14,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -119,7 +122,7 @@ enum CampaignStatus {
 model Tenant {
   id        String   @id // e.g. abhibus, confirmtkt, ixigo_trains, ixigo_flights
   name      String
-  verticals Vertical[]
+  verticals Json // JSON array of Vertical
   theme     Json // { brand, brandInk, font, logoText }
   config    Json // features, timing, quiet, ads, thresholds, identity_mode
   version   Int      @default(1)
@@ -130,7 +133,7 @@ model Tenant {
   webhooks  Webhook[]
   bots      Bot[]
 
-  @@map("tenant")
+  @@map("chat_console_tenant")
 }
 
 model ApiClient {
@@ -140,7 +143,7 @@ model ApiClient {
   clientId   String    @unique @map("client_id")
   secretHash String    @map("secret_hash") // scrypt
   secretHint String    @map("secret_hint") // last 4 chars
-  scopes     String[]
+  scopes     Json // JSON array of String
   createdBy  String?   @map("created_by")
   createdAt  DateTime  @default(now()) @map("created_at")
   lastUsedAt DateTime? @map("last_used_at")
@@ -148,7 +151,7 @@ model ApiClient {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("api_client")
+  @@map("chat_console_api_client")
 }
 
 /// Dashboard users (Ops, Marketing, Developer, Admin, Support, Viewer).
@@ -158,14 +161,14 @@ model User {
   name         String
   passwordHash String    @map("password_hash")
   role         UserRole
-  tenantIds    String[]  @map("tenant_ids") // empty = all tenants
+  tenantIds    Json  @map("tenant_ids") // JSON array of String; empty = all tenants
   active       Boolean   @default(true)
   createdAt    DateTime  @default(now()) @map("created_at")
   lastLoginAt  DateTime? @map("last_login_at")
   /// Notification centre: { seenAt, read: [event ids] } — what this person has already seen.
   notifState   Json?     @map("notif_state")
 
-  @@map("dashboard_user")
+  @@map("chat_console_dashboard_user")
 }
 
 model Room {
@@ -206,7 +209,7 @@ model Room {
 
   @@unique([tenantId, tripKey])
   @@index([state, purgeAt])
-  @@map("room")
+  @@map("chat_console_room")
 }
 
 model Channel {
@@ -220,7 +223,7 @@ model Channel {
   messages Message[]
 
   @@unique([roomId, kind])
-  @@map("channel")
+  @@map("chat_console_channel")
 }
 
 model Member {
@@ -231,7 +234,7 @@ model Member {
   segmentFrom     String?    @map("segment_from")
   segmentTo       String?    @map("segment_to")
   partySize       Int        @default(1) @map("party_size")
-  seatRefs        String[]   @map("seat_refs") // Ops only, never shown
+  seatRefs        Json   @map("seat_refs") // JSON array of String; Ops only, never shown
   chartStatus     String?    @map("chart_status")
   locale          String     @default("en-IN")
   notify          Json       @default("{}")
@@ -252,7 +255,7 @@ model Member {
 
   @@unique([roomId, externalUserId])
   @@index([roomId, role])
-  @@map("member")
+  @@map("chat_console_member")
 }
 
 model Message {
@@ -273,7 +276,7 @@ model Message {
 
   @@unique([channelId, senderId, clientMsgId])
   @@index([channelId, createdAt])
-  @@map("message")
+  @@map("chat_console_message")
 }
 
 model Reaction {
@@ -285,7 +288,7 @@ model Reaction {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@id([messageId, memberId, key])
-  @@map("reaction")
+  @@map("chat_console_reaction")
 }
 
 model Receipt {
@@ -296,7 +299,7 @@ model Receipt {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@id([messageId, memberId])
-  @@map("receipt")
+  @@map("chat_console_receipt")
 }
 
 model Block {
@@ -306,7 +309,7 @@ model Block {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@id([roomId, blockerId, blockedId])
-  @@map("member_block")
+  @@map("chat_console_member_block")
 }
 
 /// Reports survive the purge (no FK) so trust & safety can act on them.
@@ -324,7 +327,7 @@ model Report {
 
   @@unique([targetKey, reporterRef])
   @@index([roomId, reportedId])
-  @@map("report")
+  @@map("chat_console_report")
 }
 
 /// The Ops action inbox: SOS, group issues, wait-for-me, lost & found, reports.
@@ -344,7 +347,7 @@ model Action {
   updatedAt    DateTime     @updatedAt @map("updated_at")
 
   @@index([tenantId, status])
-  @@map("ops_action")
+  @@map("chat_console_ops_action")
 }
 
 model IssueReport {
@@ -354,7 +357,7 @@ model IssueReport {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@id([roomId, label, memberId])
-  @@map("issue_report")
+  @@map("chat_console_issue_report")
 }
 
 /// Every identity reveal and moderation action, kept for weekly review.
@@ -370,7 +373,7 @@ model AuditLog {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([tenantId, createdAt])
-  @@map("audit_log")
+  @@map("chat_console_audit_log")
 }
 
 /// Fixes from official feeds and on-board travellers; fused into one position.
@@ -385,7 +388,7 @@ model LocationFix {
   recordedAt DateTime @default(now()) @map("recorded_at")
 
   @@index([roomId, recordedAt])
-  @@map("location_fix")
+  @@map("chat_console_location_fix")
 }
 
 model TripEvent {
@@ -397,7 +400,7 @@ model TripEvent {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([roomId, createdAt])
-  @@map("trip_event")
+  @@map("chat_console_trip_event")
 }
 
 model Campaign {
@@ -406,11 +409,11 @@ model Campaign {
   advertiser  String
   format      CampaignFormat
   status      CampaignStatus @default(draft)
-  tenantIds   String[]       @map("tenant_ids") // empty = all
-  verticals   Vertical[]
-  routes      String[] // route / train_no / flight_no; empty = all
-  stops       String[] // stop_offer: stop names/codes
-  stages      RoomState[]
+  tenantIds   Json       @map("tenant_ids") // JSON array of String; empty = all
+  verticals   Json // JSON array of Vertical
+  routes      Json // JSON array of String; route / train_no / flight_no; empty = all
+  stops       Json // JSON array of String; stop_offer: stop names/codes
+  stages      Json // JSON array of RoomState
   creative    Json // title, body, cta, tile
   poll        Json?
   survey      Json?
@@ -423,7 +426,7 @@ model Campaign {
   createdBy   String?        @map("created_by")
   createdAt   DateTime       @default(now()) @map("created_at")
 
-  @@map("campaign")
+  @@map("chat_console_campaign")
 }
 
 model CampaignDelivery {
@@ -436,7 +439,7 @@ model CampaignDelivery {
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([campaignId, createdAt])
-  @@map("campaign_delivery")
+  @@map("chat_console_campaign_delivery")
 }
 
 model SurveyTemplate {
@@ -446,7 +449,7 @@ model SurveyTemplate {
   questions Json
   createdAt DateTime @default(now()) @map("created_at")
 
-  @@map("survey_template")
+  @@map("chat_console_survey_template")
 }
 
 model SurveyResponse {
@@ -456,21 +459,21 @@ model SurveyResponse {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@id([messageId, memberId])
-  @@map("survey_response")
+  @@map("chat_console_survey_response")
 }
 
 model Webhook {
   id        String   @id // wh_xxxx
   tenantId  String   @map("tenant_id")
   url       String
-  events    String[]
+  events    Json // JSON array of String
   secret    String
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("webhook")
+  @@map("chat_console_webhook")
 }
 
 /// Every event the platform emits, delivered or not — powers the event stream and webhook retries.
@@ -484,7 +487,7 @@ model EventLog {
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([tenantId, createdAt])
-  @@map("event_log")
+  @@map("chat_console_event_log")
 }
 
 model Bot {
@@ -493,10 +496,10 @@ model Bot {
   name       String
   label      String
   webhookUrl String?  @map("webhook_url")
-  triggers   String[]
+  triggers   Json // JSON array of String
   createdAt  DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("bot")
+  @@map("chat_console_bot")
 }

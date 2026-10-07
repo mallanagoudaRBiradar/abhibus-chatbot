@@ -1,4 +1,5 @@
 import { prisma } from '../db/prisma';
+import { retryOnConflict } from '../db/retry';
 import { config } from '../config';
 import { bookingSource, journeyIdFor } from '../booking';
 import { DEMO } from '../demo/demoData';
@@ -9,24 +10,30 @@ import { tracker } from '../tracking/gpsProvider';
 import { haversineKm } from '../lib/geo';
 import { logger } from '../lib/logger';
 import { maskPnr, normalisePnr, normaliseSeat } from '../lib/util';
-import { AVATARS, DISPLAY_NAME_RE, QR_RADIUS_KM, type JoinResponse, type JourneyInfo, type QrInvite, type QrJoinCheck } from '../shared/protocol';
-import { checkMessage } from '../shared/moderation';
+import { personaOf, pickPersona } from '../shared/personas';
+import { QR_RADIUS_KM, type JoinResponse, type JourneyInfo, type QrInvite, type QrJoinCheck } from '../shared/protocol';
 import { hub, REMOVED_REASON } from '../realtime/hub';
 import type { BusJourney } from '@prisma/client';
+import { platformBridge } from '../platform/bridge';
 
 export class JoinError extends Error {
   constructor(public code: 'NOT_FOUND' | 'TRIP_NOT_LIVE' | 'SEAT_CLAIMED' | 'JOURNEY_CLOSED' | 'INVALID' | 'REMOVED' | 'TOO_FAR', message: string, public meta?: Record<string, unknown>) { super(message); }
 }
 
 export interface ProfileInput { name: string; avatar: string | null }
-/** First name + avatar the passenger picks. Letters only and run through the chat filter (no numbers / handles in names). */
-export function cleanProfile(p: ProfileInput): ProfileInput {
-  const name = p.name.trim().replace(/\s+/g, ' ');
-  if (!DISPLAY_NAME_RE.test(name)) throw new JoinError('INVALID', 'Use your first name — letters only, up to 24 characters.');
-  const verdict = checkMessage(name);
-  if (!verdict.ok) throw new JoinError('INVALID', 'Please choose a different name.');
-  if (p.avatar && !AVATARS[p.avatar]) throw new JoinError('INVALID', 'Pick an avatar from the list.');
-  return { name, avatar: p.avatar ?? null };
+
+/**
+ * Trip identity: assigned, never typed. A passenger who already has a persona
+ * keeps it (rejoins, app restarts); everyone else gets a fresh random one that
+ * nobody on this bus has (shared/personas.ts). Women get women heroes/characters.
+ */
+export async function tripIdentity(journeyId: string, row: { seatNumber: string; gender: 'M' | 'F' | 'O'; displayName: string | null; avatarId: string | null } | null): Promise<ProfileInput> {
+  if (row?.displayName && personaOf(row.avatarId)) return { name: row.displayName, avatar: row.avatarId };
+  const others = await prisma.passengerBooking.findMany({
+    where: { journeyId, displayName: { not: null }, ...(row ? { NOT: { seatNumber: row.seatNumber } } : {}) },
+    select: { displayName: true, avatarId: true },
+  });
+  return pickPersona(row?.gender ?? 'O', new Set(others.map((o) => o.avatarId ?? '')), new Set(others.map((o) => o.displayName!.toLowerCase())));
 }
 
 export async function assertNotRemoved(journeyId: string, seat: string) {
@@ -45,7 +52,7 @@ const NOT_FOUND = () => new JoinError('NOT_FOUND', 'We couldn’t find an active
  *  3. Upsert the journey + a privacy-stripped projection of ALL seats on the
  *     PNR (needed for family bookings & the women-room gate).
  *  4. Enforce the chat window: opens CHAT_OPEN_BEFORE_START_MIN before
- *     departure, closes PURGE_AFTER_ARRIVAL_MIN after arrival.
+ *     departure (earliest boarding), closes CHAT_CLOSE_AFTER_LAST_DROP_MIN after the last drop.
  *  5. Bind the seat to this device (first device wins) to stop a co-traveller
  *     on the same PNR from impersonating another seat, especially to reach
  *     the women-only room.
@@ -80,13 +87,30 @@ async function demoSeatFor(pnr: string, seat: string, deviceId: string): Promise
   return { pnr: extra.pnr, seat: free };
 }
 
-export async function joinJourney(input: { pnr: string; seat: string; deviceId: string; profile: ProfileInput }): Promise<JoinResponse> {
-  const profile = cleanProfile(input.profile);
-  let pnr = normalisePnr(input.pnr);
-  let seat = normaliseSeat(input.seat);
-  if (config.DEMO_MODE) ({ pnr, seat } = await demoSeatFor(pnr, seat, input.deviceId));
-  if (!/^[A-Z0-9]{4,20}$/.test(pnr) || !/^[A-Z0-9]{1,6}$/.test(seat) || input.deviceId.length < 8) throw NOT_FOUND();
+/** `profile` is accepted from older app builds and ignored: trip names are assigned (tripIdentity). */
+export interface JoinInput { pnr: string; seat: string; deviceId: string; profile?: unknown }
+/** Who vouched for this passenger: the signed-in AbhiBus account (jwt mode) or the AbhiBus backend (partner mode). */
+export interface JoinSession { userId: string | null }
 
+/**
+ * PARTNER source: bookings were pushed to us (features/ingest.ts), so the
+ * journey and every seat already exist. No booking-DB access at join time.
+ */
+async function partnerSeat(pnr: string, seat: string, session: JoinSession) {
+  const rows = await prisma.passengerBooking.findMany({
+    where: { pnrNumber: pnr, seatNumber: seat, journey: { status: { not: 'PURGED' } } },
+    include: { journey: true },
+  });
+  if (!rows.length) throw NOT_FOUND();
+  // A PNR is one journey; if a resale left two, prefer the one whose chat is open now.
+  const now = Date.now();
+  const row = rows.find((r) => +r.journey.startTime - config.CHAT_OPEN_BEFORE_START_MIN * 60_000 <= now && now <= +purgeTimeFor(r.journey)) ?? rows[0];
+  if (config.STRICT_PNR_OWNERSHIP && (!session.userId || row.customerId !== session.userId)) throw NOT_FOUND();
+  return { journey: row.journey, gender: row.gender };
+}
+
+/** LEGACY sources (mock demo tickets, direct abrs_new read): build the journey + seat projection at join time. */
+async function legacySeat(pnr: string, seat: string) {
   const booking = await bookingSource.findByPnr(pnr);
   if (!booking || !booking.isActive) throw NOT_FOUND();
   const mySeat = booking.seats.find((s) => s.seat === seat);
@@ -94,12 +118,14 @@ export async function joinJourney(input: { pnr: string; seat: string; deviceId: 
 
   const journeyId = journeyIdFor(booking.serviceId, booking.journeyDate);
   let journey = await prisma.busJourney.findUnique({ where: { journeyId } });
-
   if (!journey) {
     // Schedule must come from the ticket tables or from ops registration.
     if (!booking.schedule) throw new JoinError('TRIP_NOT_LIVE', 'Trip chat opens when your bus is about to depart.');
-    journey = await prisma.busJourney.create({
-      data: {
+    // Upsert: the first passengers of a bus often join in the same second (departure push).
+    journey = await retryOnConflict(() => prisma.busJourney.upsert({
+      where: { journeyId },
+      update: {},
+      create: {
         journeyId,
         serviceId: booking.serviceId,
         journeyDate: booking.journeyDate,
@@ -108,67 +134,90 @@ export async function joinJourney(input: { pnr: string; seat: string; deviceId: 
         routeName: config.DEMO_MODE ? DEMO.routeName : `${booking.meta.sourceCity ?? 'Origin'} to ${booking.meta.destinationCity ?? 'Destination'}`,
         sourceCity: booking.meta.sourceCity ?? 'Origin',
         destinationCity: booking.meta.destinationCity ?? 'Destination',
-        startTime: booking.schedule.start,
-        estimatedEndTime: booking.schedule.end,
+        startTime: booking.schedule!.start,
+        estimatedEndTime: booking.schedule!.end,
         status: 'SCHEDULED',
       },
-    });
+    }));
   }
+  if (journey.status !== 'PURGED') {
+    // Projection of every seat on this PNR. Name/age are never read, never stored.
+    await retryOnConflict(() => prisma.$transaction(
+      booking.seats.map((s) =>
+        prisma.passengerBooking.upsert({
+          where: { journeyId_seatNumber: { journeyId, seatNumber: s.seat } },
+          create: { journeyId, seatNumber: s.seat, pnrNumber: pnr, gender: s.gender, phoneHash: s.phoneHash, channel: booking.channel },
+          update: { pnrNumber: pnr, gender: s.gender, phoneHash: s.phoneHash },
+        }),
+      ),
+    ));
+  }
+  return { journey, gender: mySeat.gender };
+}
+
+export async function joinJourney(input: JoinInput, session: JoinSession = { userId: null }): Promise<JoinResponse> {
+  let pnr = normalisePnr(input.pnr);
+  let seat = normaliseSeat(input.seat);
+  if (config.DEMO_MODE) ({ pnr, seat } = await demoSeatFor(pnr, seat, input.deviceId));
+  if (!/^[A-Z0-9]{4,20}$/.test(pnr) || !/^[A-Z0-9]{1,6}$/.test(seat) || input.deviceId.length < 8) throw NOT_FOUND();
+
+  let { journey, gender } = config.BOOKING_SOURCE === 'partner' ? await partnerSeat(pnr, seat, session) : await legacySeat(pnr, seat);
+  const journeyId = journey.journeyId;
 
   if (journey.status === 'PURGED') throw new JoinError('JOURNEY_CLOSED', 'This trip chat has ended.');
   const now = Date.now();
   const opensAt = +journey.startTime - config.CHAT_OPEN_BEFORE_START_MIN * 60_000;
-  if (now < opensAt) throw new JoinError('TRIP_NOT_LIVE', 'Trip chat isn’t open yet.', { opensAt: new Date(opensAt).toISOString() });
+  if (now < opensAt) throw new JoinError('TRIP_NOT_LIVE', 'Trip chat isn’t open yet.', {
+    opensAt: new Date(opensAt).toISOString(), sourceCity: journey.sourceCity, destinationCity: journey.destinationCity, operatorName: journey.operatorName,
+  });
   const closesAt = purgeTimeFor(journey);
   if (now > +closesAt) throw new JoinError('JOURNEY_CLOSED', 'This trip chat has ended.');
   if (journey.status === 'SCHEDULED' && now >= +journey.startTime)
     journey = await prisma.busJourney.update({ where: { journeyId }, data: { status: 'IN_TRANSIT' } });
 
-  // Projection of every seat on this PNR. Name/age are never read, never stored.
-  await prisma.$transaction(
-    booking.seats.map((s) =>
-      prisma.passengerBooking.upsert({
-        where: { journeyId_seatNumber: { journeyId, seatNumber: s.seat } },
-        create: { journeyId, seatNumber: s.seat, pnrNumber: pnr, gender: s.gender, phoneHash: s.phoneHash, channel: booking.channel },
-        update: { pnrNumber: pnr, gender: s.gender, phoneHash: s.phoneHash },
-      }),
-    ),
-  );
-
-  // Seat <-> device binding.
-  const row = await prisma.passengerBooking.findUniqueOrThrow({ where: { journeyId_seatNumber: { journeyId, seatNumber: seat } } });
-  // Real trips: a seat belongs to the first phone that claims it (stops a co-traveller
-  // on a family PNR taking over a woman's seat). Demo: tickets are shared by everyone
-  // trying the app, so the newest device simply takes the seat over.
-  const takeover = false; // demo: each browser gets its own seat (demoSeatFor), never someone else's
-  if (row.deviceId && row.deviceId !== input.deviceId && !takeover)
-    throw new JoinError('SEAT_CLAIMED', 'This seat is already in the chat on another phone. Contact AbhiBus support if that isn’t you.');
+  // Seat <-> device binding. A seat belongs to the first phone that claims it
+  // (stops a co-traveller on a family PNR taking over a woman's seat). Support
+  // can release it (POST /v1/partner/journeys/:id/seats/:seat/release).
   await assertNotRemoved(journeyId, seat);
-  await prisma.passengerBooking.update({
-    where: { id: row.id },
-    data: { displayName: profile.name, avatarId: profile.avatar, ...(row.deviceId && !takeover ? {} : { deviceId: input.deviceId, claimedAt: new Date() }) },
-  });
-  hub.setProfile(journeyId, seat, { name: profile.name, avatar: profile.avatar, guest: false });
+  const row = await prisma.passengerBooking.findUniqueOrThrow({ where: { journeyId_seatNumber: { journeyId, seatNumber: seat } } });
+  if (row.deviceId && row.deviceId !== input.deviceId)
+    throw new JoinError('SEAT_CLAIMED', 'This seat is already in the chat on another phone. Contact AbhiBus support if that isn’t you.');
+  if (!row.deviceId) {
+    // Conditional claim: of two phones racing for an unclaimed seat, exactly one wins.
+    const claimed = await prisma.passengerBooking.updateMany({ where: { id: row.id, deviceId: null }, data: { deviceId: input.deviceId, claimedAt: new Date() } });
+    if (!claimed.count) {
+      const now2 = await prisma.passengerBooking.findUnique({ where: { id: row.id }, select: { deviceId: true } });
+      if (now2?.deviceId !== input.deviceId) throw new JoinError('SEAT_CLAIMED', 'This seat is already in the chat on another phone. Contact AbhiBus support if that isn’t you.');
+    }
+  }
+  const profile = await tripIdentity(journeyId, row);
+  await prisma.passengerBooking.update({ where: { id: row.id }, data: { displayName: profile.name, avatarId: profile.avatar } });
+  hub.setProfile(journeyId, seat, { name: profile.name, avatar: profile.avatar, guest: false, boardAt: row.boardingAt?.getTime() ?? null });
+  platformBridge.addMember(journeyId, seat); // Ops console member list (no-op unless configured)
 
-  await prisma.chatRoom.upsert({
-    where: { journeyId_roomType: { journeyId, roomType: 'MAIN_COMMON' } },
-    create: { journeyId, roomType: 'MAIN_COMMON' }, update: {},
-  });
+  await hub.roomId(journeyId, 'MAIN_COMMON');
 
   const token = signChatToken({ jid: journeyId, pnr, seat }, closesAt);
   return {
     token,
-    me: { seat, handle: profile.name, name: profile.name, avatar: profile.avatar, guest: false, pnrMasked: maskPnr(pnr), gender: mySeat.gender },
+    me: { seat, handle: profile.name, name: profile.name, avatar: profile.avatar, guest: false, pnrMasked: maskPnr(pnr), gender },
     journey: await journeyInfo(journey),
     supportPhone: config.SUPPORT_PHONE || null,
   };
 }
 
+/**
+ * When the chat ends: CHAT_CLOSE_AFTER_LAST_DROP_MIN (3 h) after the last passenger's
+ * drop time (estimatedEndTime = latest droppingDateTime, kept up to date from the bookings),
+ * or after the actual arrival when the bus runs later than that. An explicit purgeAt
+ * (Ops ended the chat in the console) wins.
+ */
 export function purgeTimeFor(j: Pick<BusJourney, 'purgeAt' | 'actualEndTime' | 'estimatedEndTime'>): Date {
   if (j.purgeAt) return j.purgeAt;
-  const arrival = j.actualEndTime ?? j.estimatedEndTime;
-  return new Date(+arrival + config.PURGE_AFTER_ARRIVAL_MIN * 60_000);
+  return closeTimeAfter(j.estimatedEndTime, j.actualEndTime);
 }
+export const closeTimeAfter = (lastDrop: Date, arrival?: Date | null) =>
+  new Date(Math.max(+lastDrop, arrival ? +arrival : 0) + config.CHAT_CLOSE_AFTER_LAST_DROP_MIN * 60_000);
 
 export async function journeyInfo(j: BusJourney): Promise<JourneyInfo> {
   const totalSeatsBooked = config.DEMO_MODE
@@ -179,6 +228,7 @@ export async function journeyInfo(j: BusJourney): Promise<JourneyInfo> {
     sourceCity: j.sourceCity, destinationCity: j.destinationCity,
     startTime: j.startTime.toISOString(), estimatedEndTime: j.estimatedEndTime.toISOString(),
     status: j.status, purgeAt: purgeTimeFor(j).toISOString(), totalSeatsBooked,
+    operatorHelpline: j.operatorHelpline ?? null,
   };
 }
 
@@ -220,8 +270,7 @@ export async function createQrInvite(journeyId: string, seat: string, coords: { 
  * They must be within QR_RADIUS_KM of the bus AND of where the QR was shown.
  * Guests get gender 'O' (unverified), so the women-only gate never opens for them.
  */
-export async function joinViaQr(input: { token: string; coords: { lat: number; lng: number } | null; deviceId: string; profile: ProfileInput }): Promise<JoinResponse & { qrCheck: QrJoinCheck }> {
-  const profile = cleanProfile(input.profile);
+export async function joinViaQr(input: { token: string; coords: { lat: number; lng: number } | null; deviceId: string; profile?: unknown }): Promise<JoinResponse & { qrCheck: QrJoinCheck }> {
   let claims;
   try { claims = verifyQrToken(input.token); } catch { throw new JoinError('NOT_FOUND', 'This QR code isn’t valid any more. Ask a passenger to show a fresh one.'); }
   const journey = await prisma.busJourney.findUnique({ where: { journeyId: claims.jid } });
@@ -239,17 +288,26 @@ export async function joinViaQr(input: { token: string; coords: { lat: number; l
   const existing = await prisma.passengerBooking.findFirst({ where: { journeyId, deviceId: input.deviceId } });
   if (existing && existing.channel !== 'QR') throw new JoinError('INVALID', 'This phone is already in the chat with an AbhiBus ticket — join with your PNR.');
   let row = existing;
+  const profile = await tripIdentity(journeyId, row);
   if (row) {
     await assertNotRemoved(journeyId, row.seatNumber);
     row = await prisma.passengerBooking.update({ where: { id: row.id }, data: { displayName: profile.name, avatarId: profile.avatar } });
   } else {
+    // G1, G2, … Two guests scanning at once would pick the same number: retry on the unique index.
     const guests = await prisma.passengerBooking.count({ where: { journeyId, channel: 'QR' } });
-    row = await prisma.passengerBooking.create({
-      data: {
-        journeyId, seatNumber: `G${guests + 1}`, pnrNumber: `QR-${randomUUID().slice(0, 8).toUpperCase()}`, gender: 'O', channel: 'QR',
-        deviceId: input.deviceId, claimedAt: new Date(), displayName: profile.name, avatarId: profile.avatar, invitedBy: claims.by,
-      },
-    });
+    for (let n = guests + 1; ; n++) {
+      try {
+        row = await prisma.passengerBooking.create({
+          data: {
+            journeyId, seatNumber: `G${n}`, pnrNumber: `QR-${randomUUID().slice(0, 8).toUpperCase()}`, gender: 'O', channel: 'QR',
+            deviceId: input.deviceId, claimedAt: new Date(), displayName: profile.name, avatarId: profile.avatar, invitedBy: claims.by,
+          },
+        });
+        break;
+      } catch (e: any) {
+        if (e?.code !== 'P2002' || n > guests + 20) throw e;
+      }
+    }
     // A friendly heads-up in the lounge, so a new face doesn't appear out of nowhere.
     void hub.createMessage(journeyId, 'MAIN_COMMON', {
       senderSeat: null, senderHandle: 'AbhiBus', contentType: 'SYSTEM',

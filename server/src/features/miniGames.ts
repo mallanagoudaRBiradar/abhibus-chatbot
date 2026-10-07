@@ -1,12 +1,14 @@
+import { randomInt } from 'crypto';
 import { prisma } from '../db/prisma';
 import { hub } from '../realtime/hub';
 import { logger } from '../lib/logger';
-import { GAME_MOVE_PREFIX,  roomKey, tttState, type ChatMessage, type GameKind, type RoomType, type TttGame } from '../shared/protocol';
+import { GAME_MOVE_PREFIX, RPS_NAMES, RPS_PICKS, SNL_MAX_PLAYERS, roomKey, rpsBeats, snlState, tttState, type ChatMessage, type GameKind, type RoomType, type SnlGame, type TttGame } from '../shared/protocol';
 import { EMOJI_BANK, QUIZ_BANK, normalise, pickRandom } from './gameBank';
 import type { StoredGame } from './gamesView';
 
 /**
- * In-chat mini games: Bus Quiz, Guess the Movie (emoji), Tic-tac-toe.
+ * In-chat mini games: Bus Quiz, Guess the Movie (emoji), Tic-tac-toe,
+ * Snakes & Ladders (2–4 players, dice rolled here) and Rock-paper-scissors.
  *
  * Storage: a game is a TEXT message whose payload carries `game` (StoredGame,
  * with secrets) plus a fallback `text`; every move is a message_reaction row
@@ -22,8 +24,11 @@ const QUIZ_SECONDS = 25;
 const EMOJI_HINT_SECONDS = 45;
 const EMOJI_SECONDS = 150;
 const TTT_ACCEPT_SECONDS = 300;
+const SNL_JOIN_SECONDS = 300;
+const RPS_ACCEPT_SECONDS = 300;
 
 type Fail = { ok: false; code: 'INVALID' | 'NOT_FOUND' | 'GAME_CLOSED' | 'ALREADY_GUESSED'; message: string };
+type RpsStored = Extract<StoredGame, { kind: 'RPS' }>;
 type Ok<T> = { ok: true; data: T };
 
 /** One quiz / emoji round at a time per room, so games don't drown the conversation. */
@@ -57,7 +62,7 @@ const sys = (journeyId: string, roomType: RoomType, text: string) =>
   hub.createMessage(journeyId, roomType, { senderSeat: null, senderHandle: 'AbhiBus', contentType: 'SYSTEM', payload: { text } });
 
 // ------------------------------------------------------------------ start ---
-export async function startGame(journeyId: string, roomType: RoomType, seat: string, kind: GameKind, clientMsgId: string): Promise<Ok<ChatMessage> | Fail> {
+export async function startGame(journeyId: string, roomType: RoomType, seat: string, kind: GameKind, clientMsgId: string, opts: { pick?: number } = {}): Promise<Ok<ChatMessage> | Fail> {
   const now = Date.now();
   const rk = roomKey(journeyId, roomType);
 
@@ -84,6 +89,13 @@ export async function startGame(journeyId: string, roomType: RoomType, seat: str
       hintAt: new Date(now + EMOJI_HINT_SECONDS * 1000).toISOString(), expiresAt: new Date(now + EMOJI_SECONDS * 1000).toISOString(),
     };
     text = `🎬 Guess the movie: ${e.emojis}`;
+  } else if (kind === 'SNL') {
+    game = { kind, challenger: seat, expiresAt: new Date(now + SNL_JOIN_SECONDS * 1000).toISOString() };
+    text = `🎲 ${hub.nameOf(journeyId, seat)} started Snakes & Ladders — join in!`;
+  } else if (kind === 'RPS') {
+    if (opts.pick == null || opts.pick < 0 || opts.pick > 2) return { ok: false, code: 'INVALID', message: 'Pick rock, paper or scissors first.' };
+    game = { kind, challenger: seat, pick: opts.pick, opponent: null, opponentPick: null, expiresAt: new Date(now + RPS_ACCEPT_SECONDS * 1000).toISOString() };
+    text = `✊✋✌️ ${hub.nameOf(journeyId, seat)} challenged the bus to rock-paper-scissors`;
   } else {
     game = { kind, challenger: seat, expiresAt: new Date(now + TTT_ACCEPT_SECONDS * 1000).toISOString() };
     text = `❌⭕ ${hub.nameOf(journeyId, seat)} challenged the bus to tic-tac-toe`;
@@ -105,13 +117,13 @@ export async function startGame(journeyId: string, roomType: RoomType, seat: str
     });
   } else {
     openChallenge.set(`${rk}:${seat}`, { messageId: msg.id, until: Date.parse(game.expiresAt) });
-    later(TTT_ACCEPT_SECONDS * 1000 + 300, () => hub.pushUpdate(msg.id));
+    later(Date.parse(game.expiresAt) - now + 300, () => hub.pushUpdate(msg.id));
   }
   return { ok: true, data: msg };
 }
 
 // ------------------------------------------------------------------ moves ---
-export type GameMove = { type: 'answer'; option: number } | { type: 'join' } | { type: 'cell'; cell: number };
+export type GameMove = { type: 'answer'; option: number } | { type: 'join' } | { type: 'cell'; cell: number } | { type: 'start' } | { type: 'roll' } | { type: 'pick'; pick: number };
 
 export function makeMove(journeyId: string, seat: string, messageId: string, move: GameMove, canAccess: (rt: RoomType) => boolean): Promise<Ok<null> | Fail> {
   return withLock(messageId, async (): Promise<Ok<null> | Fail> => {
@@ -149,6 +161,46 @@ export function makeMove(journeyId: string, seat: string, messageId: string, mov
       await hub.emitReactions(journeyId, g.roomType, messageId);
       for (const l of tttListeners) l(journeyId, g.roomType, messageId);
       return { ok: true, data: null };
+    } else if (g.game.kind === 'SNL' && (move.type === 'join' || move.type === 'start' || move.type === 'roll')) {
+      const st = snlState(g.game as SnlGame, g.reactions);
+      if (move.type === 'join') {
+        if (st.players.includes(seat)) return { ok: false, code: 'INVALID', message: 'You’re already in this game.' };
+        if (st.started) return { ok: false, code: 'GAME_CLOSED', message: 'This game has already started.' };
+        if (st.players.length >= SNL_MAX_PLAYERS) return { ok: false, code: 'GAME_CLOSED', message: 'This game is full.' };
+        if (now >= Date.parse(g.game.expiresAt)) return { ok: false, code: 'GAME_CLOSED', message: 'This game expired.' };
+        await add('join');
+      } else if (move.type === 'start') {
+        if (seat !== g.game.challenger) return { ok: false, code: 'INVALID', message: 'Only the host can start the game.' };
+        if (st.started) return { ok: false, code: 'INVALID', message: 'Already started.' };
+        if (st.players.length < 2) return { ok: false, code: 'INVALID', message: 'Wait for at least one more player.' };
+        if (now >= Date.parse(g.game.expiresAt)) return { ok: false, code: 'GAME_CLOSED', message: 'This game expired.' };
+        await add('start');
+        openChallenge.delete(`${roomKey(journeyId, g.roomType)}:${g.game.challenger}`);
+      } else {
+        if (st.turn !== seat) return { ok: false, code: 'INVALID', message: st.turn ? 'Wait for your turn.' : 'This game is over.' };
+        const die = randomInt(1, 7); // rolled here, never by the phone
+        const key = `r${st.rollCount}d${die}`;
+        await add(key);
+        const after = snlState(g.game as SnlGame, { ...g.reactions, [`${GAME_MOVE_PREFIX}${key}`]: [seat] });
+        if (after.winner) {
+          const others = after.players.filter((x) => x !== after.winner).map((x) => hub.nameOf(journeyId, x)).join(', ');
+          void sys(journeyId, g.roomType, `🏆 ${hub.nameOf(journeyId, after.winner)} won Snakes & Ladders against ${others}`);
+        }
+      }
+    } else if (g.game.kind === 'RPS' && move.type === 'pick') {
+      const game = g.game as RpsStored;
+      if (seat === game.challenger) return { ok: false, code: 'INVALID', message: 'You can’t answer your own challenge.' };
+      if (game.opponent) return { ok: false, code: 'GAME_CLOSED', message: `${hub.nameOf(journeyId, game.opponent)} already answered.` };
+      if (now >= Date.parse(game.expiresAt)) return { ok: false, code: 'GAME_CLOSED', message: 'This challenge expired.' };
+      await add(`p${move.pick}`);
+      const done = { ...game, opponent: seat, opponentPick: move.pick };
+      await prisma.message.update({ where: { messageId }, data: { payload: { ...(g.m.payload as object), game: done } } });
+      openChallenge.delete(`${roomKey(journeyId, g.roomType)}:${game.challenger}`);
+      await hub.pushUpdate(messageId);
+      const r = rpsBeats(game.pick, move.pick);
+      const a = hub.nameOf(journeyId, game.challenger), b = hub.nameOf(journeyId, seat);
+      const picks = `${RPS_PICKS[game.pick]} ${RPS_NAMES[game.pick]} vs ${RPS_PICKS[move.pick]} ${RPS_NAMES[move.pick]}`;
+      void sys(journeyId, g.roomType, r === 0 ? `🤝 ${a} and ${b} drew at rock-paper-scissors (${picks})` : `🏆 ${r > 0 ? a : b} beat ${r > 0 ? b : a} at rock-paper-scissors (${picks})`);
     } else {
       return { ok: false, code: 'INVALID', message: 'That move doesn’t fit this game.' };
     }

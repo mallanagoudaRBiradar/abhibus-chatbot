@@ -32,6 +32,7 @@ import { adClick } from '../core/ads';
 import { createMessage } from '../core/messages';
 import { campaignCreate, campaignStats } from './campaigns';
 import { S2C } from '../shared/protocol';
+import { strs } from '../lib/json';
 
 /**
  * ============================================================================
@@ -69,8 +70,9 @@ v1.post('/oauth/token', wrap(async (req, res) => {
   if (!limits.login.take(`oauth:${req.ip}:${b.client_id}`)) throw new ApiError('rate_limited', 'Too many attempts.');
   const c = await prisma.apiClient.findUnique({ where: { clientId: b.client_id } });
   if (!c || c.revokedAt || !verifySecret(b.client_secret, c.secretHash)) throw new ApiError('unauthorized', 'Invalid client credentials.');
-  const asked = b.scope ? b.scope.split(/\s+/).filter(Boolean) : c.scopes;
-  const scopes = asked.filter((s) => c.scopes.includes(s));
+  const granted = strs(c.scopes);
+  const asked = b.scope ? b.scope.split(/\s+/).filter(Boolean) : granted;
+  const scopes = asked.filter((s) => granted.includes(s));
   await prisma.apiClient.update({ where: { id: c.id }, data: { lastUsedAt: new Date() } });
   res.json({ access_token: signTenantToken({ tid: c.tenantId, cid: c.clientId, scopes }), token_type: 'Bearer', expires_in: 3600, tenant: c.tenantId, scope: scopes.join(' ') });
 }));
@@ -89,7 +91,7 @@ v1.get('/rooms', requireTenant('rooms:read'), wrap(async (req, res) => {
   const q = z.object({ vertical: z.enum(['bus', 'train', 'flight', 'custom']).optional(), state: z.string().optional(), date: z.string().optional(), cursor: z.string().optional(), operator_id: z.string().optional(), train_no: z.string().optional(), flight_no: z.string().optional() }).parse(req.query);
   const where: any = { tenantId: req.tenant!.tid, ...(q.vertical ? { vertical: q.vertical } : {}), ...(q.state ? { state: { in: q.state.split(',') } } : {}) };
   if (q.date) { const d = new Date(`${q.date}T00:00:00+05:30`); where.departsAt = { gte: d, lt: new Date(+d + 86_400_000) }; }
-  for (const k of ['operator_id', 'train_no', 'flight_no'] as const) if (q[k]) where.scope = { path: [k], equals: q[k] };
+  for (const k of ['operator_id', 'train_no', 'flight_no'] as const) if (q[k]) where.scope = { path: `$.${k}`, equals: q[k] }; // MySQL JSON path syntax
   const rows = await prisma.room.findMany({ where, orderBy: { departsAt: 'asc' }, take: 51, ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}) });
   res.json({ data: await Promise.all(rows.slice(0, 50).map((r) => roomDto(r))), next_cursor: rows.length > 50 ? rows[49].id : null });
 }));

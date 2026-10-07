@@ -2,13 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import type { BottomSheetModal } from '@gorhom/bottom-sheet';
-import { Ionicons } from '@expo/vector-icons';
+import { useBottomSheetModal, type BottomSheetModal } from '@gorhom/bottom-sheet';
+import { Ionicons } from '../components/icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TopBar } from '../components/TopBar';
-import { RouteStrip } from '../components/RouteStrip';
+import { TripTicker } from '../components/TripTicker';
 import { RoomSwitcher } from '../components/RoomSwitcher';
 import { PinnedRail } from '../components/PinnedRail';
 import { RoomPane } from '../components/RoomPane';
@@ -24,23 +24,26 @@ import { stopLiveShare } from '../services/liveLocation';
 import { LiveDot } from '../components/LiveDot';
 import { useServerNow } from '../hooks/useNow';
 import { mmss } from '../utils/format';
-import { FRAME_MAX, motion, palette, radius, themed } from '../theme/tokens';
+import { FRAME_MAX, byMode, motion, palette, radius, themed } from '../theme/tokens';
+import { SettingsSheet } from '../components/SettingsSheet';
+import { WALLPAPERS, useSettings } from '../store/settings';
+import { host } from '../services/host';
 
 /**
  * ============================================================================
  *  BusChatScreen
  * ============================================================================
- *   ┌───────────────────────────────────────────┐
- *   │ Hyderabad → Bengaluru ⌄       [● 14] [SOS] │  TopBar
- *   │ Arriving ~6:10 AM                           │
- *   │ ──────●- - - - - - - - - - - - - - - - - -  │  RouteStrip (live bus)
- *   │ [ Bus lounge | Women only ]                 │  RoomSwitcher (F only)
+ *   ┌─────────────────────────────────────────────┐
+ *   │ ← Hyderabad → Bengaluru            [🛡] [⋮] │  TopBar
+ *   │   Sunrise Travels · 15 travellers           │
+ *   │ [📍 Your stop HSR Layout in ~2 h · • • •]    │  TripTicker ("up next", rotates)
+ *   │ [ 👥 Everyone | 🛡 Women Zone • ]           │  RoomSwitcher (F only)
  *   │ ┌ Dinner stop ............... 14:32 ┐       │  PinnedRail (≤1 card)
  *   ├─────────────────────────────────────────────┤
- *   │  messages (pager: lounge | women)           │  RoomPane x2
+ *   │  messages (pager: everyone | women)         │  RoomPane x2
  *   ├─────────────────────────────────────────────┤
- *   │ [+] [ message…                ☺ ] [mic/send] │  Composer (+ = location, poll,
- *   └─────────────────────────────────────────────┘   photos, games, stickers)
+ *   │ (Where is the bus now?) (Rest stop?) …      │  Composer: quick replies,
+ *   │ [ Message everyone   ☺ 🎤 ] [📍] [🎮/➤]    │  location, games tray / send
  *   └─────────────────────────────────────────────┘
  *
  *  State: everything lives in the Zustand store (store/chatStore.ts), fed by
@@ -88,6 +91,9 @@ export function BusChatScreen({ onBack }: { onBack: () => void }) {
   const games = useRef<BottomSheetModal>(null);
   const reactions = useRef<BottomSheetModal>(null);
   const qrInvite = useRef<BottomSheetModal>(null);
+  const settings = useRef<BottomSheetModal>(null);
+  const wallpaper = useSettings((s) => s.wallpaper);
+  const wallColors = wallpaper === 'plain' ? null : byMode(WALLPAPERS[wallpaper]);
   const [focusMsg, setFocusMsg] = useState<UiMessage | null>(null);
 
   const openSeenBy = useCallback((m: UiMessage) => { setFocusMsg(m); seenBy.current?.present(); }, []);
@@ -97,32 +103,46 @@ export function BusChatScreen({ onBack }: { onBack: () => void }) {
   const openReactions = useCallback((m: UiMessage) => { setFocusMsg(m); reactions.current?.present(); }, []);
   const openVotes = useCallback((m: UiMessage) => { setFocusMsg(m); pollVotes.current?.present(); }, []);
 
-  const leave = async () => {
+  /** Exit chat / chat ended. Inside the AbhiBus app, hand control back with `close`. */
+  const leave = async (reason = 'left') => {
     trip.current?.dismiss();
     await stopLiveShare();
     chatSocket.disconnect();
-    await clearSession();
+    if (!host.embedded) await clearSession();
     useChat.getState().reset();
+    host.post('close', { reason });
   };
 
-  if (closed) return <ClosedState reason={closed.reason} note={closed.note} onDone={leave} />;
+  // Android hardware back (sent by the app): close the top sheet or menu first, then leave the screen.
+  const { dismiss: dismissSheet } = useBottomSheetModal();
+  const menuOpen = useRef(false);
+  menuOpen.current = !!menu;
+  useEffect(() => host.on('back', () => {
+    if (useChat.getState().closed) return void leave('back');
+    if (menuOpen.current) return setMenu(null);
+    if (!dismissSheet()) onBack();
+  }), [dismissSheet, onBack]);
+
+  if (closed) return <ClosedState reason={closed.reason} note={closed.note} onDone={() => leave(closed.reason === 'ENDED' ? 'ended' : closed.reason === 'REMOVED' ? 'removed' : 'unauthorized')} />;
 
   return (
     <View style={styles.root}>
       <TopBar onBack={onBack} onOpenPassengers={() => passengers.current?.present()} onOpenSos={() => sos.current?.present()} onOpenMenu={() => trip.current?.present()} />
-      <RouteStrip />
+      <TripTicker onOpenTrip={() => trip.current?.present()} onOpenLandmarks={() => landmarks.current?.present()} onOpenPassengers={() => passengers.current?.present()} />
       {womenEligible && <RoomSwitcher roomIndex={roomIndex} />}
       <LiveShareBanner />
       <PinnedRail onOpenGame={() => game.current?.present()} />
 
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <View style={styles.pagerClip}>
+          {/* Settings → Chat background: a gradient drawn in code (no image to download). */}
+          {wallColors && <LinearGradient colors={wallColors} style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]} />}
           <Animated.View style={[styles.pager, { width: width * (womenEligible ? 2 : 1) }, pager]}>
-            <RoomPane roomType="MAIN_COMMON" width={width} onLongPress={openMenu} onOpenSeenBy={openSeenBy} onOpenVotes={openVotes} onOpenReactions={openReactions} />
-            {womenEligible && <RoomPane roomType="WOMEN_ONLY" width={width} onLongPress={openMenu} onOpenSeenBy={openSeenBy} onOpenVotes={openVotes} onOpenReactions={openReactions} />}
+            <RoomPane roomType="MAIN_COMMON" width={width} onLongPress={openMenu} onOpenSeenBy={openSeenBy} onOpenVotes={openVotes} onOpenReactions={openReactions} onShareLocation={() => location.current?.present()} />
+            {womenEligible && <RoomPane roomType="WOMEN_ONLY" width={width} onLongPress={openMenu} onOpenSeenBy={openSeenBy} onOpenVotes={openVotes} onOpenReactions={openReactions} onShareLocation={() => location.current?.present()} />}
           </Animated.View>
           {/* Soft edge so messages fade under the header instead of being sliced. */}
-          <LinearGradient pointerEvents="none" colors={[palette.navy, palette.bgClear]} style={styles.fade} />
+          {!wallColors && <LinearGradient colors={[palette.navy, palette.bgClear]} style={[styles.fade, { pointerEvents: 'none' }]} />}
         </View>
         <Composer roomIndex={roomIndex} onOpenGame={() => game.current?.present()} onOpenLandmarks={() => landmarks.current?.present()} onOpenLocation={() => location.current?.present()} onOpenPoll={() => pollCreate.current?.present()} onOpenGames={() => games.current?.present()} />
       </KeyboardAvoidingView>
@@ -135,8 +155,9 @@ export function BusChatScreen({ onBack }: { onBack: () => void }) {
       <SosSheet ref={sos} />
       <LandmarkSheet ref={landmarks} onClose={() => landmarks.current?.dismiss()} />
       <GameSheet ref={game} />
-      <TripSheet ref={trip} onLeave={leave} onInvite={() => { trip.current?.dismiss(); qrInvite.current?.present(); }} />
+      <TripSheet ref={trip} onOpenSettings={() => { trip.current?.dismiss(); settings.current?.present(); }} onOpenPassengers={() => { trip.current?.dismiss(); passengers.current?.present(); }} onLeave={() => leave('left')} onInvite={() => { trip.current?.dismiss(); qrInvite.current?.present(); }} />
       <QrInviteSheet ref={qrInvite} />
+      <SettingsSheet ref={settings} />
       <LocationSheet ref={location} onClose={() => location.current?.dismiss()} />
       <PollCreateSheet ref={pollCreate} onClose={() => pollCreate.current?.dismiss()} />
       <PollVotesSheet ref={pollVotes} message={focusMsg} />

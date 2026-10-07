@@ -21,7 +21,7 @@ export async function reportIssue(room: Room, m: Member, rt: RoomType, label: st
   await prisma.issueReport.upsert({ where: { roomId_label_memberId: { roomId: room.id, label, memberId: m.id } }, create: { roomId: room.id, label, memberId: m.id }, update: {} });
   const count = await prisma.issueReport.count({ where: { roomId: room.id, label } });
   const { cfg } = await getTenant(room.tenantId);
-  let card = await prisma.message.findFirst({ where: { channel: { roomId: room.id }, contentType: 'ISSUE', payload: { path: ['label'], equals: label } } });
+  let card = await prisma.message.findFirst({ where: { channel: { roomId: room.id }, contentType: 'ISSUE', payload: { path: '$.label', equals: label } } });
   const wasEscalated = !!(card?.payload as any)?.escalated;
   const escalated = wasEscalated || count >= cfg.issue_escalate_at;
   const payload = { label, count, escalated, threshold: cfg.issue_escalate_at };

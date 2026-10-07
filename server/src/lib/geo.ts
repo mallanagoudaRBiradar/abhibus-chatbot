@@ -25,6 +25,21 @@ export class Polyline<T extends LatLng & { name: string }> {
     return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t, segment: i };
   }
   fracOf(index: number) { return this.cumKm[index] / this.totalKm; }
+  /** 0..1 position of the closest point on the line to `p` (equirectangular projection per segment). */
+  project(p: LatLng): { frac: number; offKm: number } {
+    if (this.points.length < 2 || !this.totalKm) return { frac: 0, offKm: this.points[0] ? haversineKm(p, this.points[0]) : 0 };
+    let best = { frac: 0, offKm: Infinity };
+    for (let i = 1; i < this.points.length; i++) {
+      const a = this.points[i - 1], b = this.points[i];
+      const kx = Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+      const bx = (b.lng - a.lng) * kx, by = b.lat - a.lat, px = (p.lng - a.lng) * kx, py = p.lat - a.lat;
+      const len2 = bx * bx + by * by;
+      const t = len2 ? Math.max(0, Math.min(1, (px * bx + py * by) / len2)) : 0;
+      const off = haversineKm(p, { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t });
+      if (off < best.offKm) best = { frac: (this.cumKm[i - 1] + t * (this.cumKm[i] - this.cumKm[i - 1])) / this.totalKm, offKm: off };
+    }
+    return best;
+  }
   nearest(p: LatLng) {
     let best = 0, bestD = Infinity;
     this.points.forEach((w, i) => { const d = haversineKm(p, w); if (d < bestD) { bestD = d; best = i; } });

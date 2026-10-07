@@ -7,6 +7,7 @@ import { etaOf, stopsOf, timetablePos } from './rooms';
 import { startGame } from './games';
 import { logger } from '../lib/logger';
 import type { FeatureKey } from '../shared/tenantConfig';
+import { strs } from '../lib/json';
 
 const MIN = 60_000;
 const FEATURE_FOR: Record<Campaign['format'], FeatureKey> = { card: 'ads', stop_offer: 'ads', sponsored_poll: 'polls', sponsored_game: 'games', survey: 'surveys' };
@@ -31,10 +32,11 @@ export async function adCheck(r: Room, c: Campaign): Promise<{ ok: true } | { ok
   const now = Date.now();
   if ((c.startsAt && +c.startsAt > now) || (c.endsAt && +c.endsAt < now)) return { ok: false, why: 'outside campaign dates' };
   if (c.capImpressions && c.impressions >= c.capImpressions) return { ok: false, why: 'impression cap reached' };
-  if (c.tenantIds.length && !c.tenantIds.includes(r.tenantId)) return { ok: false, why: 'tenant not targeted' };
-  if (!c.verticals.includes(r.vertical)) return { ok: false, why: 'vertical not targeted' };
-  if (c.routes.length && !routeKeys(r).some((k) => c.routes.includes(k))) return { ok: false, why: 'route not targeted' };
-  if (!c.stages.includes(r.state)) return { ok: false, why: `room stage ${r.state}` };
+  const tenantIds = strs(c.tenantIds), routes = strs(c.routes);
+  if (tenantIds.length && !tenantIds.includes(r.tenantId)) return { ok: false, why: 'tenant not targeted' };
+  if (!strs(c.verticals).includes(r.vertical)) return { ok: false, why: 'vertical not targeted' };
+  if (routes.length && !routeKeys(r).some((k) => routes.includes(k))) return { ok: false, why: 'route not targeted' };
+  if (!strs(c.stages).includes(r.state)) return { ok: false, why: `room stage ${r.state}` };
   const isAd = c.format !== 'survey';
   if (isQuiet(cfg) && isAd) return { ok: false, why: 'quiet hours' };
   if (isAd) {
@@ -45,7 +47,7 @@ export async function adCheck(r: Room, c: Campaign): Promise<{ ok: true } | { ok
   }
   if (c.format === 'stop_offer') {
     const stops = stopsOf(r);
-    const i = stops.findIndex((s) => c.stops.some((x) => x.toLowerCase() === s.name.toLowerCase() || x === s.code));
+    const i = stops.findIndex((s) => strs(c.stops).some((x) => x.toLowerCase() === s.name.toLowerCase() || x === s.code));
     if (i < 0) return { ok: false, why: 'stop not on route' };
     const eta = etaOf(r, i);
     const pos = timetablePos(r);
@@ -76,7 +78,7 @@ export async function deliver(r: Room, c: Campaign, opts: { force?: boolean } = 
   } else if (c.format === 'sponsored_game') {
     messageId = (await startGame(r, 'MAIN_COMMON', null, 'QUIZ', undefined, c.advertiser)).id;
   } else {
-    const stop = c.format === 'stop_offer' ? stopsOf(r).find((s) => c.stops.some((x) => x.toLowerCase() === s.name.toLowerCase() || x === s.code))?.name ?? null : null;
+    const stop = c.format === 'stop_offer' ? stopsOf(r).find((s) => strs(c.stops).some((x) => x.toLowerCase() === s.name.toLowerCase() || x === s.code))?.name ?? null : null;
     messageId = (await createMessage(r.id, 'MAIN_COMMON', { senderName: c.advertiser, contentType: 'AD', payload: { campaignId: c.id, advertiser: c.advertiser, format: c.format, title: cr.title ?? c.name, body: cr.body ?? '', cta: cr.cta ?? 'Open', tile: cr.tile ?? '#2b9d74', stop, coupon: cr.coupon ?? null } })).id;
   }
   const members = await prisma.member.count({ where: { roomId: r.id, removedAt: null, role: 'traveller' } });

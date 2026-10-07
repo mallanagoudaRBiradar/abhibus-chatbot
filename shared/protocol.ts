@@ -255,6 +255,8 @@ export interface JourneyInfo {
   status: 'SCHEDULED' | 'IN_TRANSIT' | 'ARRIVED' | 'PURGED';
   purgeAt: string | null;
   totalSeatsBooked: number;
+  /** Bus operator's helpline (from the booking), offered in the SOS sheet. */
+  operatorHelpline: string | null;
 }
 
 export interface ProgressState {

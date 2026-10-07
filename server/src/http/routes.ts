@@ -16,17 +16,27 @@ import { hub } from '../realtime/hub';
 import { DEMO } from '../demo/demoData';
 import type { BroadcastPayload } from '../shared/protocol';
 import { platformBridge } from '../platform/bridge';
+import { open as openPii } from '../lib/pii';
 
 export const router = Router();
+/** Set on SIGTERM so the load balancer stops sending new connections before we exit. */
+export const lifecycle = { draining: false };
 
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
 
 // ---------------------------------------------------------------- health --
+/** Liveness: the process is up. */
 router.get('/healthz', (_req, res) => res.json({ ok: true, demo: config.DEMO_MODE, bookingSource: config.BOOKING_SOURCE }));
+/** Readiness: the process can serve (database reachable, not draining). Point the load balancer here. */
+router.get('/readyz', wrap(async (_req, res) => {
+  if (lifecycle.draining) return res.status(503).json({ ok: false, reason: 'draining' });
+  await prisma.$queryRaw`SELECT 1`;
+  res.json({ ok: true });
+}));
 
 // ------------------------------------------------------------ demo tickets --
 router.get('/v1/demo/tickets', (_req, res) => {
-  if (!config.DEMO_MODE) return res.status(404).end();
+  if (!config.DEMO_MODE) return res.json({ tickets: [] }); // real trips: no sample tickets (and no 404 noise in the browser console)
   res.json({ tickets: DEMO.tickets.map((t) => ({ pnr: t.pnr, label: t.label, seats: t.seats.map((s) => s.seat) })) });
 });
 
@@ -38,7 +48,7 @@ router.get('/v1/demo/tickets', (_req, res) => {
 router.post('/v1/journey-chat/join', wrap(async (req, res) => {
   const body = z.object({
     pnr: z.string().min(4).max(24), seat: z.string().min(1).max(8), deviceId: z.string().min(8).max(80),
-    profile: z.object({ name: z.string().max(40), avatar: z.string().max(16).nullable() }),
+    profile: z.unknown().optional(), // ignored: trip names are assigned
   }).safeParse(req.body);
   if (!body.success) return res.status(400).json({ code: 'INVALID', message: 'Enter your PNR, seat number and name.' });
 
@@ -46,10 +56,12 @@ router.post('/v1/journey-chat/join', wrap(async (req, res) => {
   if (!limits.join.take(throttleKey)) return res.status(429).json({ code: 'RATE_LIMITED', message: 'Too many attempts. Wait a minute and try again.' });
 
   const session = await verifyAppSession(req.header('authorization'));
+  if (!session && config.APP_AUTH_MODE === 'partner' && !config.DEMO_MODE)
+    return res.status(404).json({ code: 'NOT_FOUND', message: 'Open the trip chat from your booking in the AbhiBus app.' });
   if (!session) return res.status(401).json({ code: 'UNAUTHORIZED', message: 'Sign in to the AbhiBus app to join your trip chat.' });
 
   try {
-    res.json(await joinJourney(body.data));
+    res.json(await joinJourney(body.data, session));
   } catch (e) {
     if (e instanceof JoinError) {
       const status = { NOT_FOUND: 404, TRIP_NOT_LIVE: 403, SEAT_CLAIMED: 409, JOURNEY_CLOSED: 410, INVALID: 400, REMOVED: 403, TOO_FAR: 403 }[e.code];
@@ -61,7 +73,7 @@ router.post('/v1/journey-chat/join', wrap(async (req, res) => {
 
 // ------------------------------------------------------------- QR join ----
 /**
- * POST /v1/journey-chat/join-qr  { token, coords, deviceId, profile }
+ * POST /v1/journey-chat/join-qr  { token, coords, deviceId }  (trip name is assigned)
  * For passengers booked elsewhere (e.g. RedBus): no AbhiBus session needed —
  * the signed invite + matching locations are the proof of being on this bus.
  */
@@ -69,7 +81,7 @@ router.post('/v1/journey-chat/join-qr', wrap(async (req, res) => {
   const body = z.object({
     token: z.string().min(20).max(2000), deviceId: z.string().min(8).max(80),
     coords: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).nullable(),
-    profile: z.object({ name: z.string().max(40), avatar: z.string().max(16).nullable() }),
+    profile: z.unknown().optional(), // ignored: trip names are assigned
   }).safeParse(req.body);
   if (!body.success) return res.status(400).json({ code: 'INVALID', message: 'Scan the QR again and allow location.' });
   if (!limits.join.take(`${req.ip}:qr`)) return res.status(429).json({ code: 'RATE_LIMITED', message: 'Too many attempts. Wait a minute and try again.' });
@@ -157,6 +169,24 @@ router.post('/v1/ops/journeys/:id/eta-game', ops, wrap(async (req, res) => {
 router.post('/v1/ops/eta-games/:id/resolve', ops, wrap(async (req, res) => {
   const { actualAt } = z.object({ actualAt: z.string().datetime({ offset: true }).optional() }).parse(req.body ?? {});
   res.json(await resolveGame(req.params.id, actualAt ? new Date(actualAt) : new Date()));
+}));
+
+/**
+ * Ops: how to reach a passenger (issue follow-up, SOS call-back). Decrypted on demand,
+ * every read is logged with who asked and why. Gone once the chat is purged.
+ */
+router.get('/v1/ops/journeys/:id/seats/:seat/contact', ops, wrap(async (req, res) => {
+  const reason = String(req.query.reason ?? '').slice(0, 120);
+  if (reason.length < 3) return res.status(400).json({ code: 'INVALID', message: 'Pass ?reason=… (logged with the request).' });
+  const b = await prisma.passengerBooking.findUnique({ where: { journeyId_seatNumber: { journeyId: req.params.id, seatNumber: req.params.seat.toUpperCase() } } });
+  if (!b) return res.status(404).json({ code: 'NOT_FOUND' });
+  logger.warn({ journeyId: req.params.id, seat: b.seatNumber, reason, actor: req.header('x-ops-user') ?? 'ops-key' }, 'AUDIT: passenger contact revealed');
+  res.json({
+    journeyId: b.journeyId, seat: b.seatNumber, pnr: b.pnrNumber, gender: b.gender,
+    name: openPii(b.passengerNameEnc), phone: openPii(b.contactPhoneEnc), chatName: b.displayName,
+    boarding: b.boardingName ? { name: b.boardingName, landmark: b.boardingLandmark, at: b.boardingAt } : null,
+    dropping: b.droppingName ? { name: b.droppingName, at: b.droppingAt } : null,
+  });
 }));
 
 router.get('/v1/ops/journeys/:id/sos', ops, wrap(async (req, res) => {

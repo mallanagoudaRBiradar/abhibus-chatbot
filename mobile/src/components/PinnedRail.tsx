@@ -3,8 +3,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing, FadeIn, FadeOut, LinearTransition, interpolateColor, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming, useReducedMotion,
 } from 'react-native-reanimated';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons, MaterialCommunityIcons } from './icons';
+import * as Haptics from '../services/haptics';
 import { Txt } from './Txt';
 import { useChat } from '../store/chatStore';
 import { useCountdown, useServerNow } from '../hooks/useNow';
@@ -59,7 +59,7 @@ export function PinnedRail({ onOpenGame }: { onOpenGame: () => void }) {
                 <Txt v="smallStrong" numberOfLines={1}>{`Guess when we reach ${game.checkpointName}`}</Txt>
                 <Txt v="meta" color={palette.textSecondary} numberOfLines={1}>{`Closest guess wins ${game.rewardPoints} AbhiBus points`}</Txt>
               </View>
-              <View style={styles.cta}><Txt v="smallStrong" color={palette.navy}>Guess</Txt></View>
+              <View style={styles.cta}><Txt v="smallStrong" color={palette.navyDeep}>Guess</Txt></View>
             </Pressable>
             <Pressable onPress={() => { Haptics.selectionAsync(); hidePin(`game:${game.id}`, true); }} hitSlop={10} style={styles.hide}
               accessibilityRole="button" accessibilityLabel="Hide. The game stays in plus, Games">
