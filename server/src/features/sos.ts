@@ -2,6 +2,7 @@ import { prisma } from '../db/prisma';
 import { config } from '../config';
 import { logger } from '../lib/logger';
 import { tracker } from '../tracking/gpsProvider';
+import { platformBridge } from '../platform/bridge';
 
 /**
  * SOS — priority alert to the AbhiBus Safety Desk + the passenger's emergency
@@ -41,6 +42,7 @@ export async function raiseSos(journeyId: string, who: { pnr: string; seat: stri
       logger.error({ incidentId: ev.id }, 'SOS webhook failed after retries');
     })();
   }
+  platformBridge.sos(journeyId, who.seat, pos ? { lat: pos.lat, lng: pos.lng } : null, ev.id); // Trip Rooms Ops inbox
   // TODO(platform): notify emergency contacts saved on the AbhiBus account (SMS/WhatsApp via prod_whatsapp).
   logger.warn({ incidentId: ev.id, journeyId, seat: who.seat }, '🚨 SOS raised');
 

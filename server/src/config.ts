@@ -41,6 +41,17 @@ const Env = z
     /** Public web address of the chat (QR invites open <PUBLIC_WEB_URL>/?qr=…). Unset in dev = this laptop's Wi-Fi IP:8081. */
     PUBLIC_WEB_URL: z.string().optional(),
 
+    /**
+     * Trip Rooms platform bridge (optional). With all three set, journeys mirror into platform rooms:
+     * Ops/support see the chat in the Console, @care tags become support tickets, SOS reaches the Ops
+     * inbox, and agent replies + Ops alerts come back into this chat. Unset = the app runs standalone.
+     */
+    PLATFORM_API_URL: z.string().url().optional(),
+    PLATFORM_CLIENT_ID: z.string().optional(),
+    PLATFORM_CLIENT_SECRET: z.string().optional(),
+    /** Where the platform can reach this server's webhook. Default: http://localhost:<PORT>/v1/platform/webhook */
+    PLATFORM_CALLBACK_URL: z.string().url().optional(),
+
     CHAT_OPEN_BEFORE_START_MIN: z.coerce.number().default(30),
     PURGE_AFTER_ARRIVAL_MIN: z.coerce.number().default(120),
     REPORT_MUTE_THRESHOLD: z.coerce.number().default(3),

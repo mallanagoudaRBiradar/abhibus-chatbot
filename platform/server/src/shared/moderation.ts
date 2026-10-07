@@ -1,0 +1,147 @@
+/**
+ * ============================================================================
+ *  Content guardrail — runs on BOTH client (instant feedback, zero latency)
+ *  and server (authoritative). The server copy is the one that matters; the
+ *  client copy only exists so the passenger sees why a message can't go out
+ *  before it ever leaves the phone.
+ *
+ *  Blocks:
+ *   PHONE         — 10+ digits, including spaced/dotted/written-out numbers
+ *                   ("nine eight 7 6 ..."), Devanagari & Telugu digits.
+ *   LINK          — URLs, bare domains, "x dot com", t.me / wa.me / handles.
+ *   EMAIL_OR_UPI  — anything@anything (catches UPI IDs like name@okaxis).
+ *   PROFANITY     — seed list (English + Hinglish + Telugu/Tamil/Kannada
+ *                   transliterations) with leetspeak/char-repeat normalisation.
+ *
+ *  Production note: the seed word list is deliberately small. Back it with the
+ *  trust-and-safety team's list and a server-side ML toxicity check.
+ * ============================================================================
+ */
+
+export type BlockReason = 'PHONE' | 'LINK' | 'EMAIL_OR_UPI' | 'PROFANITY' | 'TOO_LONG' | 'EMPTY';
+export type ModerationResult = { ok: true; text: string } | { ok: false; reason: BlockReason };
+
+export const MAX_TEXT_LENGTH = 500;
+
+export const BLOCK_REASON_COPY: Record<BlockReason, string> = {
+  PHONE: 'Phone numbers can’t be shared here. It keeps everyone on the bus safe.',
+  LINK: 'Links and social handles can’t be shared in trip chat.',
+  EMAIL_OR_UPI: 'Emails and UPI IDs can’t be shared in trip chat.',
+  PROFANITY: 'That message has language that isn’t allowed here.',
+  TOO_LONG: `Keep it under ${MAX_TEXT_LENGTH} characters.`,
+  EMPTY: 'Type something first.',
+};
+
+const DIGIT_WORDS: Record<string, true> = {
+  zero: true, oh: true, one: true, two: true, three: true, four: true, five: true,
+  six: true, seven: true, eight: true, nine: true, double: true, triple: true,
+  // Hindi / Telugu transliterations commonly used to dodge filters
+  ek: true, do: true, teen: true, char: true, paanch: true, chhe: true, saat: true, aath: true, nau: true,
+  okati: true, rendu: true, moodu: true, nalugu: true, aidu: true, aaru: true, edu: true, enimidi: true, tommidi: true,
+};
+
+// Seed list. Exact-token matches for short words, substring matches for long ones.
+const PROFANITY_EXACT = [
+  'fuck', 'fucker', 'fucking', 'fck', 'fuk', 'shit', 'bitch', 'bastard', 'asshole', 'dick', 'cunt', 'slut', 'whore',
+  'bsdk', 'mkc', 'chutiya', 'chutiye', 'chut', 'gandu', 'gaand', 'lauda', 'lavda', 'lodu', 'randi', 'harami',
+  'bhosdi', 'bhosdike', 'lanja', 'dengu', 'pooku', 'modda', 'punda', 'oombu', 'thevdiya', 'sule', 'bolimaga',
+];
+const PROFANITY_SUBSTR = [
+  'motherfuck', 'madarchod', 'chootiya', 'chotiya', 'behenchod', 'bhenchod', 'bhosdike', 'lanjakoduku', 'dengey', 'thevidiya', 'chutiya',
+];
+
+const NATIVE_DIGITS: Record<string, string> = {
+  '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
+  '౦': '0', '౧': '1', '౨': '2', '౩': '3', '౪': '4', '౫': '5', '౬': '6', '౭': '7', '౮': '8', '౯': '9',
+};
+
+function normaliseBase(raw: string): string {
+  return raw
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width chars used to split words
+    .replace(/[०-९౦-౯]/g, (d) => NATIVE_DIGITS[d] ?? d)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function deLeet(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[@4]/g, 'a').replace(/[1!|]/g, 'i').replace(/3/g, 'e')
+    .replace(/0/g, 'o').replace(/[5$]/g, 's').replace(/7/g, 't').replace(/\*/g, 'u');
+}
+
+function containsPhone(text: string): boolean {
+  const tokens = text.toLowerCase().split(/[\s,.\-_/|()+:;]+/).filter(Boolean);
+  let run = 0;
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) run += t.length;
+    else if (DIGIT_WORDS[t]) run += 1;
+    else run = 0;
+    if (run >= 10) return true;
+  }
+  // also catch digits glued with letters: "call9876543210"
+  return /\d{10,}/.test(text.replace(/[\s\-.()]/g, ''));
+}
+
+const URL_PATTERNS = [
+  /\b(?:https?:\/\/|www\.)\S+/i,
+  /\b(?:t\.me|wa\.me|bit\.ly|tinyurl|chat\.whatsapp|instagram\.com|fb\.me|snapchat\.com)\b/i,
+  /\b[a-z0-9-]{2,}\s*(?:\.|\[dot\]|\(dot\)|\sdot\s)\s*(?:com|in|net|org|io|co|me|ly|app|xyz|info|link|site|online|shop|live|gg|tk)\b/i,
+  /\b(?:insta(?:gram)?|ig|snap(?:chat)?|telegram|tg)\b\s*(?:id|handle)?\s*[:@]\s*@?[a-z0-9._]{3,}/i,
+  /(?:^|\s)@[a-z0-9._]{3,}/i,
+];
+
+function containsProfanity(text: string): boolean {
+  const base = deLeet(text);
+  const variants = [base.replace(/(.)\1{2,}/g, '$1$1'), base.replace(/(.)\1+/g, '$1')];
+  for (const v of variants) {
+    const tokens = v.split(/[^a-z]+/).filter(Boolean);
+    if (tokens.some((t) => PROFANITY_EXACT.includes(t))) return true;
+    const squashed = v.replace(/[^a-z]/g, '');
+    if (PROFANITY_SUBSTR.some((w) => squashed.includes(w))) return true;
+  }
+  return false;
+}
+
+/**
+ * In-app @mentions (Tara, the tenant's care desk, e.g. "@ConfirmTkt Care") are allowed;
+ * any other @handle is still treated as a social handle. Pass the tenant's care handle.
+ */
+const ALLOWED_MENTIONS = /@(?:abhibus care|customer care|customer support|customercare|customer|care|support|helpdesk|tara)\b/gi;
+
+/**
+ * Ways a traveller can call the support desk in any trip chat. The tenant's own handle
+ * (e.g. "@ConfirmTkt Care") always works too. Any match turns the message into a support ticket.
+ */
+export const CARE_ALIASES = ['care', 'support', 'customer care', 'customer support', 'customercare', 'customer', 'helpdesk'];
+export function isCareMention(text: string, careHandle?: string): boolean {
+  const t = (text ?? '').toLowerCase();
+  const handles = [...CARE_ALIASES, ...(careHandle ? [careHandle.toLowerCase()] : [])];
+  return handles.some((h) => new RegExp(`(^|[^\\w@])@${escapeRe(h)}(?![\\w])`, 'i').test(t));
+}
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function checkMessage(raw: string, allowedHandles: string[] = []): ModerationResult {
+  const text = normaliseBase(raw ?? '');
+  if (!text) return { ok: false, reason: 'EMPTY' };
+  if (text.length > MAX_TEXT_LENGTH) return { ok: false, reason: 'TOO_LONG' };
+  let probe = text.replace(ALLOWED_MENTIONS, ' ');
+  for (const h of allowedHandles) if (h.trim()) probe = probe.replace(new RegExp(`@${escapeRe(h.trim())}\\b`, 'gi'), ' ');
+  if (/[a-z0-9._%+-]+@[a-z0-9.-]{2,}/i.test(probe)) return { ok: false, reason: 'EMAIL_OR_UPI' };
+  if (URL_PATTERNS.some((re) => re.test(probe))) return { ok: false, reason: 'LINK' };
+  if (containsPhone(probe)) return { ok: false, reason: 'PHONE' };
+  if (containsProfanity(probe)) return { ok: false, reason: 'PROFANITY' };
+  return { ok: true, text };
+}
+
+/**
+ * Lost & found and other free-text posts where blocking would be unhelpful:
+ * mask phone numbers, emails/UPI IDs and @handles instead of rejecting.
+ */
+export function mask(t: string): string {
+  return t
+    .replace(/(?:\+?91[\s-]?)?\b[6-9]\d{4}[\s-]?\d{5}\b/g, '[number hidden]')
+    .replace(/\b[\w.+-]+@[\w-]+(?:\.[\w.]+)?\b/g, '[ID hidden]')
+    .replace(/(^|\s)@(?!tara\b)[a-z0-9_.]{3,}/gi, '$1[ID hidden]');
+}

@@ -51,10 +51,40 @@ const NOT_FOUND = () => new JoinError('NOT_FOUND', 'We couldn’t find an active
  *     the women-only room.
  *  6. Issue a seat-scoped JWT that expires at purge time.
  */
+/**
+ * Demo only. A demo ticket is shared by everyone trying the app, so:
+ *  - first browser to tap it gets the ticket's seat;
+ *  - the same browser always gets its own seat back (rejoin, reload, second tab);
+ *  - any other browser gets a fresh seat on the same bus with the same ticket type,
+ *    as a new PNR (e.g. AB7X2K9QG2), so it is a separate passenger everywhere
+ *    (name, reports, women-only access, Trip Rooms console).
+ */
+async function demoSeatFor(pnr: string, seat: string, deviceId: string): Promise<{ pnr: string; seat: string }> {
+  const base = DEMO.tickets.find((t) => t.pnr === pnr);
+  if (!base) return { pnr, seat };
+  const journeyId = journeyIdFor(DEMO.serviceId, DEMO.journeyDate());
+  const rows = await prisma.passengerBooking.findMany({ where: { journeyId } });
+  const mine = rows.find((r) => r.deviceId === deviceId && (r.pnrNumber === pnr || r.pnrNumber.startsWith(`${pnr}G`)));
+  if (mine) return { pnr: mine.pnrNumber, seat: mine.seatNumber };
+  const held = rows.find((r) => r.seatNumber === seat && r.deviceId && r.deviceId !== deviceId);
+  if (!held) return { pnr, seat };
+  const gender = base.seats.find((s) => s.seat === seat)?.gender ?? base.seats[0].gender;
+  const taken = new Set([...rows.map((r) => r.seatNumber), ...DEMO.crowd.map((c) => c.seat), ...DEMO.tickets.flatMap((t) => t.seats.map((s) => s.seat)), ...[...DEMO.extraTickets.values()].flatMap((t) => t.seats.map((s) => s.seat))]);
+  const free = Array.from({ length: 30 }, (_, i) => i + 1).flatMap((n) => ['L', 'U'].map((b) => `${n}${b}`)).find((s) => !taken.has(s));
+  if (!free) throw new JoinError('SEAT_CLAIMED', 'The demo bus is full. Try again after the next restart.');
+  let k = 2;
+  while (DEMO.extraTickets.has(`${pnr}G${k}`) || rows.some((r) => r.pnrNumber === `${pnr}G${k}`)) k++;
+  const extra = { pnr: `${pnr}G${k}`, label: `${base.label} (another browser)`, seats: [{ seat: free, gender }] };
+  DEMO.extraTickets.set(extra.pnr, extra);
+  logger.info({ ticket: pnr, seat: free, pnr: extra.pnr }, 'demo: another browser joined, gave it its own seat');
+  return { pnr: extra.pnr, seat: free };
+}
+
 export async function joinJourney(input: { pnr: string; seat: string; deviceId: string; profile: ProfileInput }): Promise<JoinResponse> {
   const profile = cleanProfile(input.profile);
-  const pnr = normalisePnr(input.pnr);
-  const seat = normaliseSeat(input.seat);
+  let pnr = normalisePnr(input.pnr);
+  let seat = normaliseSeat(input.seat);
+  if (config.DEMO_MODE) ({ pnr, seat } = await demoSeatFor(pnr, seat, input.deviceId));
   if (!/^[A-Z0-9]{4,20}$/.test(pnr) || !/^[A-Z0-9]{1,6}$/.test(seat) || input.deviceId.length < 8) throw NOT_FOUND();
 
   const booking = await bookingSource.findByPnr(pnr);
@@ -110,7 +140,7 @@ export async function joinJourney(input: { pnr: string; seat: string; deviceId: 
   // Real trips: a seat belongs to the first phone that claims it (stops a co-traveller
   // on a family PNR taking over a woman's seat). Demo: tickets are shared by everyone
   // trying the app, so the newest device simply takes the seat over.
-  const takeover = !!row.deviceId && row.deviceId !== input.deviceId && config.DEMO_MODE;
+  const takeover = false; // demo: each browser gets its own seat (demoSeatFor), never someone else's
   if (row.deviceId && row.deviceId !== input.deviceId && !takeover)
     throw new JoinError('SEAT_CLAIMED', 'This seat is already in the chat on another phone. Contact AbhiBus support if that isn’t you.');
   await assertNotRemoved(journeyId, seat);

@@ -74,6 +74,8 @@ model BusJourney {
   journeyDate      String        @map("journey_date")
   busNumber        String        @map("bus_number")
   operatorName     String        @map("operator_name")
+  /// Trip Rooms platform room this journey is mirrored into (set by the platform bridge).
+  platformRoomId   String?       @map("platform_room_id")
   routeName        String        @map("route_name")
   sourceCity       String        @map("source_city")
   destinationCity  String        @map("destination_city")
@@ -143,6 +145,8 @@ model Message {
   payload      Json
   clientMsgId  String?     @map("client_msg_id") // idempotency key for offline retries
   isHidden     Boolean     @default(false) @map("is_hidden")
+  /// Private to one seat (Trip Rooms support replies). Null = everyone in the room.
+  visibleToSeat String?    @map("visible_to_seat")
   createdAt    DateTime    @default(now()) @map("created_at")
 
   room      ChatRoom          @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
