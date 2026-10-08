@@ -372,6 +372,8 @@ export interface RoomSnapshot {
   mutedNote?: string | null;
   blockedSeats: string[];
   serverNow: string;
+  /** Your current trip name + avatar (it can change once, when an old-style name is replaced). */
+  you?: { name: string; avatar: string | null };
 }
 
 export interface Me {

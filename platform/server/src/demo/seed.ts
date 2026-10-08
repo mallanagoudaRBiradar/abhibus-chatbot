@@ -84,7 +84,7 @@ export async function seed() {
   const avatars = ['animal-1', 'animal-8', 'fun-6', null, 'animal-2', 'people-6', 'fun-0', 'fun-3', 'people-7', null, 'fun-1', 'animal-3', 'animal-5', 'fun-7'];
   for (const [i, m] of busMembers.entries()) await prisma.member.update({ where: { id: m.id }, data: { avatarId: avatars[i] } });
   for (const m of busMembers.slice(1, 4)) await prisma.member.update({ where: { id: m.id }, data: { sharingLocation: true } });
-  await createMessage(bus.id, 'MAIN_COMMON', { senderName: 'System', contentType: 'SYSTEM', payload: { text: 'Room open. Only your first name and avatar are visible to others.' } });
+  await createMessage(bus.id, 'MAIN_COMMON', { senderName: 'System', contentType: 'SYSTEM', payload: { text: 'Room open. Only your trip name and avatar are visible to others.' } });
   await postAlert(bus, { text: 'Bus is running 25 min late from Ameerpet. New time at Gachibowli: about 25 min after schedule.', severity: 'warning', translations: { hi: 'बस अमीरपेट से 25 मिनट देरी से चल रही है।' } }, 'ops@triprooms.local');
   await createMessage(bus.id, 'MAIN_COMMON', { senderId: busMembers[1].id, senderName: 'Priya', contentType: 'TEXT', payload: { text: BUS_LINES[0] } });
   await createMessage(bus.id, 'MAIN_COMMON', { senderName: 'Tara', contentType: 'TARA', payload: { text: 'Yes. 3 travellers on board are sharing location. The bus is past Gachibowli, heading towards Kurnool.', source: 'rules' } });

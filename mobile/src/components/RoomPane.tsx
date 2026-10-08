@@ -182,7 +182,7 @@ function RoomIntro({ roomType }: { roomType: RoomType }) {
       <Txt v="small" color={palette.textSecondary} style={{ textAlign: 'center' }}>
         {women
           ? 'Only passengers booked as women on this trip can open this room. Others on the bus can’t see it exists.'
-          : 'Everyone here is verified by their ticket (guests who joined via QR are marked). Everyone gets a random trip name (hello, Snoring Hulk 👋), so real names, seats and phone numbers stay hidden.'}
+          : 'Everyone here is verified by their ticket (guests who joined via QR are marked). Everyone gets a random trip name (hello, Hulk 👋), so real names, seats and phone numbers stay hidden.'}
       </Txt>
       <Txt v="meta" color={palette.textTertiary} style={{ textAlign: 'center' }}>Messages are deleted 3 hours after the last passenger’s drop time.</Txt>
     </View>

@@ -16,7 +16,8 @@ import { makeMove, startGame } from '../features/miniGames';
 import { notifyCare } from '../features/careMentions';
 import { tripInfo } from '../features/tripInfo';
 import { platformBridge } from '../platform/bridge';
-import { createQrInvite, JoinError } from '../features/journeyService';
+import { createQrInvite, JoinError, tripIdentity } from '../features/journeyService';
+import { isPersonaName, personaOf } from '../shared/personas';
 import { haversineKm } from '../lib/geo';
 import { checkMessage, BLOCK_REASON_COPY } from '../shared/moderation';
 import {
@@ -43,7 +44,7 @@ import {
  *  16 KB max frame, permessage-deflate above 1 KB, 25s heartbeat.
  * ============================================================================
  */
-interface SocketData { journeyId: string; pnr: string; seat: string; handle: string }
+interface SocketData { journeyId: string; pnr: string; seat: string; handle: string; avatar: string | null }
 type ChatSocket = Socket<any, any, any, SocketData>;
 
 const RoomTypeZ = z.enum(['MAIN_COMMON', 'WOMEN_ONLY']);
@@ -126,9 +127,17 @@ export function createSocketServer(httpServer: HttpServer) {
       if (!journey || journey.status === 'PURGED') return next(new Error('JOURNEY_CLOSED'));
       const ban = await prisma.seatMute.findUnique({ where: { journeyId_seatNumber: { journeyId: claims.jid, seatNumber: claims.seat } } });
       if (ban?.reason === REMOVED_REASON) return next(new Error('REMOVED'));
-      const name = booking.displayName ?? handleForSeat(claims.seat);
-      hub.setProfile(claims.jid, claims.seat, { name, avatar: booking.avatarId, guest: booking.channel === 'QR', boardAt: booking.boardingAt?.getTime() ?? null });
-      socket.data = { journeyId: claims.jid, pnr: claims.pnr, seat: claims.seat, handle: name };
+      let name = booking.displayName ?? handleForSeat(claims.seat);
+      let avatar = booking.avatarId;
+      // A trip name from an older naming scheme ("Lazy Rocket", or a character no longer in the list):
+      // give a current one right away, so nobody has to rejoin. The phone learns it from the room snapshot (`you`).
+      const persona = personaOf(avatar);
+      if (booking.displayName && !(persona && isPersonaName(persona, booking.displayName))) {
+        ({ name, avatar } = await tripIdentity(claims.jid, booking));
+        await prisma.passengerBooking.update({ where: { id: booking.id }, data: { displayName: name, avatarId: avatar } });
+      }
+      hub.setProfile(claims.jid, claims.seat, { name, avatar, guest: booking.channel === 'QR', boardAt: booking.boardingAt?.getTime() ?? null });
+      socket.data = { journeyId: claims.jid, pnr: claims.pnr, seat: claims.seat, handle: name, avatar };
       next();
     } catch {
       next(new Error('UNAUTHORIZED'));
@@ -191,6 +200,7 @@ export function createSocketServer(httpServer: HttpServer) {
         mutedNote: await muteNote(journeyId, seat),
         blockedSeats: await blockedSeats(journeyId, seat),
         serverNow: new Date().toISOString(),
+        you: { name: socket.data.handle, avatar: socket.data.avatar },
       };
       hub.schedulePresence(journeyId, roomType);
       return ok(snapshot);

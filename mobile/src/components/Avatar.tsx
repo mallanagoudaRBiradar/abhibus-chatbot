@@ -8,7 +8,7 @@ import { personaOf } from '../shared/personas';
 
 /**
  * A passenger's face in the chat:
- *  - heroes (trip names like "Snoring Hulk"): an emblem badge, their symbol on
+ *  - heroes (trip names like "Hulk"): an emblem badge, their symbol on
  *    their colour with a light ring, like a chest logo
  *  - film/comedy characters: their emoji face on a soft tile of their colour
  *  - older sessions: the emoji they picked, or their initial
@@ -31,6 +31,13 @@ export function Avatar({ name, avatar, size = 32, online, guest }: { name: strin
     face = (
       <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: `${persona.color}44`, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         <Txt style={{ fontSize: size * 0.58, lineHeight: size * 0.72 }} allowFontScaling={false}>{persona.glyph}</Txt>
+      </View>
+    );
+  } else if (avatar?.startsWith('p:')) {
+    // A character that's no longer in the list (the server swaps it on the next connect): never show a bare letter.
+    face = (
+      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: palette.surfaceRaised, alignItems: 'center', justifyContent: 'center' }}>
+        <Txt style={{ fontSize: size * 0.56, lineHeight: size * 0.7 }} allowFontScaling={false}>🎭</Txt>
       </View>
     );
   } else {

@@ -44,7 +44,7 @@ async function step(r: Room, now: number) {
     } else if (now > arr) next = 'closed';
   } else if (r.state === 'scheduled' && now >= +r.opensAt) {
     next = 'open';
-    await sys(r, `Room open. Only your ${cfg.identity.mode === 'handle' ? 'handle' : 'first name and avatar'} is visible to others.`);
+    await sys(r, `Room open. Only your ${cfg.identity.mode === 'handle' ? 'handle is' : 'trip name and avatar are'} visible to others.`);
   } else if (r.state === 'open' && now >= dep && r.vertical !== 'flight') {
     next = 'onboard';
     await sys(r, 'You’re on the way. Welcome aboard!');

@@ -5,6 +5,7 @@ import { API_URL } from './api';
 import { useChat, type UiMessage } from '../store/chatStore';
 import { checkMessage, BLOCK_REASON_COPY } from '../shared/moderation';
 import { host } from './host';
+import { saveSession } from './session';
 import { type TripInfo,
   C2S, S2C,
   type Ack, type ChatMessage, type EtaGameState, type PresenceState, type ProgressState, type ReactionEmoji,
@@ -131,8 +132,20 @@ class ChatSocketService {
       const lastSent = [...room.messages].reverse().find((m) => m.status === 'sent');
       const since = room.joined && lastSent ? lastSent.createdAt : undefined;
       const ack = await this.request<RoomSnapshot>(C2S.ROOM_JOIN, { roomType, since }, 15_000);
-      if (ack.ok) useChat.getState().applySnapshot(ack.data, !!since);
+      if (ack.ok) {
+        useChat.getState().applySnapshot(ack.data, !!since);
+        this.adoptIdentity(ack.data.you);
+      }
     }));
+  }
+
+  /** The server replaced an old-style trip name: show the new name + avatar now, and remember it. */
+  private adoptIdentity(you: RoomSnapshot['you']) {
+    const s = useChat.getState().session;
+    if (!you || !s || (s.me.name === you.name && s.me.avatar === you.avatar)) return;
+    const next = { ...s, me: { ...s.me, name: you.name, handle: you.name, avatar: you.avatar } };
+    useChat.setState({ session: next });
+    if (!host.embedded) void saveSession(next);
   }
 
   /** Trip panel data (traveller counts, stops, bus position) from the server's DB. */

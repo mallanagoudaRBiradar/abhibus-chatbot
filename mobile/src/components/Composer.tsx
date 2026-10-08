@@ -20,9 +20,9 @@ import { font, motion, palette, radius, roomTheme, themed } from '../theme/token
 /**
  * Bottom input bar.
  *   (Where is the bus now?) (How long is the rest stop?) (Sharing my location now 📍) …   quick replies
- *   [+] [ Message everyone        🎤 ] [📍] [🎮 ⇄ ➤]
+ *   [+] [ Message · @ for help    🎤 ] [🎮 ⇄ ➤]
  * - + opens the tray: location, poll, pickup photos, emoji, stickers.
- * - 📍 opens the location sheet. 🎮 opens the games list only, and morphs into
+ * - 🎮 opens the games list only, and morphs into
  *   Send while there's text.
  * - Voice mode replaces the field with a live transcript + level meter. The
  *   final transcript drops into the field so the passenger can fix it first.
@@ -203,10 +203,6 @@ export function Composer({ roomIndex, onOpenGame, onOpenLandmarks, onOpenLocatio
               )}
             </Animated.View>
 
-            <Pressable onPress={() => { Haptics.selectionAsync(); setTrayOpen(false); onOpenLocation(); }} style={({ pressed }) => [styles.roundBtn, styles.locBtn, pressed && { opacity: 0.7 }]}
-              accessibilityRole="button" accessibilityLabel="Share location">
-              <Ionicons name="locate" size={21} color={palette.text} style={{ pointerEvents: 'none' }} />
-            </Pressable>
 
             {/* pointerEvents as styles, icons included: on web an icon glyph keeps pointer-events:auto, so a hidden button swallowed taps. */}
             <View style={styles.morphSlot}>

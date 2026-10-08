@@ -133,7 +133,7 @@ Return our response to the app unchanged:
 | `403 REMOVED` | Removed after reports from passengers | Show `message` |
 | `400 INVALID` | Name failed the filter (letters only, max 24) | Show `message` |
 
-Passengers don't pick a name: the chat gives each one a random trip name and avatar, for example "Snoring Hulk" with a Hulk badge or "Window Seat Baburao" with a 👓 face. The full list is in `shared/personas.ts`. Names never repeat on one bus and stay the same when a passenger rejoins, and women get women heroes and characters. Any `profile` field sent is ignored. Seats are bound to the **first phone** that opens them. That's what stops a co-traveller on a family PNR from taking a woman's seat to get into the women-only room.
+Passengers don't pick a name: the chat gives each one a random trip name and avatar, for example "Hulk" with a 💪 badge or "Baburao" with a 👓 face (32 characters; "Groot 2" only if a bus has more people than characters). The full list is in `shared/personas.ts`. Names are random for everyone (any passenger can get any character), never repeat on one bus, and stay the same when a passenger rejoins. Any `profile` field sent is ignored. Seats are bound to the **first phone** that opens them. That's what stops a co-traveller on a family PNR from taking a woman's seat to get into the women-only room.
 
 **Phone changed or app reinstalled** (`SEAT_CLAIMED` for the real passenger): support verifies the person, then calls `POST /v1/partner/journeys/{journeyId}/seats/{seat}/release`, and the next phone that opens it gets the seat.
 

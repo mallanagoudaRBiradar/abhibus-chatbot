@@ -341,7 +341,7 @@ curl -sS -X POST "$CHAT_URL/v1/partner/chat-sessions" \
 | 400 | `INVALID` | Name must be letters only (max 24), or a bad field |
 
 - `deviceId` must be **stable per app install**: on iOS, `identifierForVendor` saved in the Keychain; on Android, a UUID in secure storage. The seat is bound to it.
-- No name or avatar is sent: the chat assigns a random trip name such as "Snoring Hulk" (see `shared/personas.ts`). The response `me.name` / `me.avatar` holds it.
+- No name or avatar is sent: the chat assigns a random trip name such as "Hulk" or "Baburao" (see `shared/personas.ts`). The response `me.name` / `me.avatar` holds it.
 
 ## 10b. Passenger contact (Ops only)
 

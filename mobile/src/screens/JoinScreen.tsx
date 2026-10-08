@@ -41,7 +41,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
   // Placeholders are deliberately faint: a bright example PNR reads as "already filled in".
   const [demo, setDemo] = useState<{ pnr: string; label: string; seats: string[] }[]>([]);
 
-  // Nobody types a name: the server hands out a random trip name + avatar ("Snoring Hulk").
+  // Nobody types a name: the server hands out a random trip name + avatar ("Batman").
   // PNR + seat joins straight away; a scanned QR waits for one tap (the location prompt needs it).
   const [qrToken, setQrToken] = useState<string | null>(null);
 
@@ -117,7 +117,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
         <Animated.View entering={FadeInDown.duration(400)} style={{ gap: 10, marginTop: 28 }}>
           <Txt v="h1">Hop on with a QR 🎟️</Txt>
           <Txt v="body" color={palette.textSecondary}>
-            You’ll get a random trip name like “Snoring Hulk” or “Window Seat Baburao”. We’ll ask for your location once, to confirm you’re with this bus.
+            You’ll get a random trip name like “Batman” or “Baburao”. We’ll ask for your location once, to confirm you’re with this bus.
           </Txt>
           {error && (
             <View style={styles.error} accessibilityLiveRegion="assertive">
@@ -152,7 +152,7 @@ export function JoinScreen({ onResume }: { onResume?: () => void }) {
       <Animated.View entering={FadeInDown.delay(80).duration(500)} style={{ gap: 10, marginTop: 28 }}>
         <Txt v="h1">Your bus has a chat tonight</Txt>
         <Txt v="body" color={palette.textSecondary}>
-          Talk to the people on your bus, see stop timers and know where the bus is. You’ll get a random trip name like “Snoring Hulk” or “Chai Loving Jack Sparrow”, so nobody sees your real name.
+          Talk to the people on your bus, see stop timers and know where the bus is. You’ll get a random trip name like “Iron Man” or “Jack Sparrow”, so nobody sees your real name.
         </Txt>
       </Animated.View>
 

@@ -23,7 +23,8 @@ import { MENTIONABLES, isSystemReactionKey, mentionsIn, type ReactionEmoji, type
 /**
  * One row in the chat. Handles:
  *  - identity: avatar + name + "On board" pill above the first message of a run
- *    (grey bubbles; mine are solid red, right-aligned). Seat numbers are never shown.
+ *    (grey bubbles; mine are solid red, right-aligned with my avatar on the right).
+ *    Seat numbers are never shown.
  *  - time below the last bubble of a run
  *  - "where is the bus?" asks render as a card with a Share my location button
  *  - grouping: consecutive messages from the same person within 3 min share one
@@ -99,6 +100,7 @@ function MessageRowImpl(props: MessageRowProps) {
   const reactionEntries = Object.entries(m.reactions).filter(([k, seats]) => seats.length > 0 && !isSystemReactionKey(k)); // poll votes / game moves ride the reactions channel
   const showSender = !mine && firstInGroup && !!m.senderSeat;
   const showAvatar = showSender; // avatar sits beside the name, at the top of a run
+  const showMyAvatar = mine && firstInGroup && !!m.senderSeat; // your own face on the right, like the others' on the left
   const senderLabel = showSender ? (
     <View style={styles.senderRow}>
       <Txt v="smallStrong" color={palette.text} numberOfLines={1} style={{ flexShrink: 1 }}>{m.senderHandle}</Txt>
@@ -245,6 +247,11 @@ function MessageRowImpl(props: MessageRowProps) {
             </Pressable>
           )}
         </View>
+        {mine && m.senderSeat && (
+          <View style={styles.avatarCol}>
+            {showMyAvatar && <Avatar name={m.senderHandle} avatar={m.senderAvatar} size={34} />}
+          </View>
+        )}
       </Animated.View>
     </View>
   );

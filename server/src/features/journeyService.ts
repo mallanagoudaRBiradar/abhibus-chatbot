@@ -10,7 +10,7 @@ import { tracker } from '../tracking/gpsProvider';
 import { haversineKm } from '../lib/geo';
 import { logger } from '../lib/logger';
 import { maskPnr, normalisePnr, normaliseSeat } from '../lib/util';
-import { personaOf, pickPersona } from '../shared/personas';
+import { isPersonaName, personaOf, pickPersona } from '../shared/personas';
 import { QR_RADIUS_KM, type JoinResponse, type JourneyInfo, type QrInvite, type QrJoinCheck } from '../shared/protocol';
 import { hub, REMOVED_REASON } from '../realtime/hub';
 import type { BusJourney } from '@prisma/client';
@@ -25,15 +25,17 @@ export interface ProfileInput { name: string; avatar: string | null }
 /**
  * Trip identity: assigned, never typed. A passenger who already has a persona
  * keeps it (rejoins, app restarts); everyone else gets a fresh random one that
- * nobody on this bus has (shared/personas.ts). Women get women heroes/characters.
+ * nobody on this bus has (shared/personas.ts), at random for everyone.
  */
 export async function tripIdentity(journeyId: string, row: { seatNumber: string; gender: 'M' | 'F' | 'O'; displayName: string | null; avatarId: string | null } | null): Promise<ProfileInput> {
-  if (row?.displayName && personaOf(row.avatarId)) return { name: row.displayName, avatar: row.avatarId };
+  // Keep an existing trip name (rejoin), unless it's from an older naming scheme ("Lazy Rocket").
+  const current = personaOf(row?.avatarId);
+  if (row?.displayName && current && isPersonaName(current, row.displayName)) return { name: row.displayName, avatar: row.avatarId };
   const others = await prisma.passengerBooking.findMany({
     where: { journeyId, displayName: { not: null }, ...(row ? { NOT: { seatNumber: row.seatNumber } } : {}) },
     select: { displayName: true, avatarId: true },
   });
-  return pickPersona(row?.gender ?? 'O', new Set(others.map((o) => o.avatarId ?? '')), new Set(others.map((o) => o.displayName!.toLowerCase())));
+  return pickPersona(new Set(others.map((o) => o.avatarId ?? '')), new Set(others.map((o) => o.displayName!.toLowerCase())));
 }
 
 export async function assertNotRemoved(journeyId: string, seat: string) {

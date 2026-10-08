@@ -20,11 +20,11 @@ import { palette, radius, themed } from '../theme/tokens';
  * title / ⋮, rest stops and the arrival game in the pinned rail, so neither
  * repeats here.
  *   🎲 Your turn in Snakes & Ladders            Play ›
- *   🎲 Moonlight Mr. Bean started Snakes & …    Join ›
+ *   🎲 Mr. Bean started Snakes & Ladders    Join ›
  *   📍 ~2 h 10 min to your stop · HSR Layout    11:00 AM ›
  *   📸 2 pickup points ahead · help people find the bus
  *   👋 3 co-travellers online · say hi
- *   🎭 You’re Moonlight Mr. Bean tonight
+ *   🎭 You’re Mr. Bean tonight
  *   🌙 Quiet hours · keep calls and videos low
  */
 type Item = { key: string; emoji: string; text: string; action?: string; tone?: string; onPress?: () => void };
